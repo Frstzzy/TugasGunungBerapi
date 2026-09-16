@@ -1,58 +1,47 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
- * Model Fisika Aerosol Vulkanik Gunung Anak Krakatau
- * Menghitung:
- * 1. Oksidasi SO2 menjadi Aerosol Sulfat (H2SO4 - H2O droplets)
- * 2. Aerosol Optical Depth (AOD pada panjang gelombang 550 nm, tau_550)
- * 3. Radiative Forcing (W/m2) dan anomali pendinginan suhu lokal (Delta T)
- * 4. Konsentrasi Partikulat Aerosol Permukaan (PM2.5 & PM10 dalam ug/m3)
- * 5. Dinamika Kecepatan Pengendapan Stokes & Waktu Tinggal di Atmosfer
+ *
+ * Fisika Komputasi Aerosol Vulkanik & Dispersi Gas SO2
+ * Studi Kasus: Gunung Anak Krakatau & Selat Sunda
+ *
+ * Model:
+ * 1. Kinetika Oksidasi Fotokimia SO2 -> H2SO4 (katalis OH-radical, radiasi UV surya, kelembaban RH)
+ * 2. Hamburan Mie & Aerosol Optical Depth (AOD 550nm)
+ * 3. Radiative Forcing Atmosfer & Efek Pendinginan Permukaan (Albedo Sulfat)
+ * 4. Dispersi Partikulat Sekunder PM2.5 / PM10 ke Stasiun Pesisir Banten & Lampung (ISPU)
  */
 
 export interface AerosolSimulationParams {
-  so2EmissionRateTonsPerDay: number; // Emisi SO2 gas (ton/hari)
-  relativeHumidityPct: number; // Kelembaban relatif atmosfer (%)
-  uvRadiationIndex: number; // Indeks radiasi UV matahari (1 - 12)
-  plumeHeightM: number; // Ketinggian puncak kolom asap (meter)
-  windSpeedMs: number; // Kecepatan angin (m/s)
-  windDirectionDeg: number; // Arah angin datang (derajat)
-  elapsedHours: number; // Jam simulasi pasca letusan
+  so2EmissionRateTonsPerDay: number; // Ton SO2/hari
+  relativeHumidityPct: number; // Kelembaban relatif % (40 - 98)
+  uvRadiationIndex: number; // Indeks UV surya (1 - 12)
+  plumeHeightM: number; // Tinggi kolom erupsi (m)
+  windSpeedMs: number; // Kecepatan angin adveksi (m/s)
+  windDirectionDeg: number; // Arah angin datang (0 - 360)
+  elapsedHours: number; // Horizon waktu pasca-letusan (jam)
 }
 
 export interface AerosolMetrics {
-  // Oksidasi Kimiawi Atmosfer
-  oxidationRatePctPerHour: number; // Laju konversi SO2 -> H2SO4 (% / jam)
-  sulfateProductionKgPerHour: number; // Produksi massa droplet sulfat per jam
-  cumulativeSulfateMassTons: number; // Akumulasi total massa aerosol sulfat (ton)
-  massMultiplier: number; // Rasio massa molar (H2SO4 + H2O hidrat) / SO2 (~ 1.53 - 1.85)
-
-  // Sifat Optik & Efek Radiasi
-  peakAod550: number; // Aerosol Optical Depth pada 550nm di pusat plume
-  aodCategory: 'Jernih' | 'Kabut Tipis' | 'Moderat' | 'Pekat' | 'Ekstrem';
-  solarRadiationAttenuationPct: number; // Reduksi radiasi matahari langsung (%)
-  radiativeForcingWm2: number; // Radiative forcing atmosfer (W/m2, bernilai negatif = pendinginan)
-  surfaceCoolingDeltaC: number; // Estimasi penurunan suhu permukaan lokal (°C)
-
-  // Mikrofisika Partikel Aerosol
-  dominantMode: 'Nucleation' | 'Aitken' | 'Accumulation' | 'Coarse';
-  meanRadiusMicrons: number; // Radius efektif droplet aerosol (mikrometer)
-  stokesSettlingVelocityMps: number; // Kecepatan pengendapan Stokes (m/s)
+  oxidationRatePctPerHour: number; // %/jam laju oksidasi SO2 ke H2SO4
+  sulfateProductionKgPerHour: number; // kg/jam laju produksi H2SO4
+  cumulativeSulfateMassTons: number; // ton akumulasi aerosol sulfat
+  peakAod550: number; // Aerosol Optical Depth puncak pada panjang gelombang 550 nm
+  peakPm25UgM3: number; // Estimasi puncak konsentrasi PM2.5 di permukaan (ug/m3)
+  aodCategory: 'Ekstrem' | 'Pekat' | 'Sedang' | 'Ringan' | 'Bersih';
+  solarRadiationAttenuationPct: number; // Reduksi radiasi matahari (%)
+  radiativeForcingWm2: number; // W/m2 Radiative forcing pendinginan negatif
+  surfaceCoolingDeltaC: number; // °C potensi penurunan suhu permukaan lokal
+  stratosphericInjection: boolean; // Apakah menembus tropopause (>11 km)
   atmosphericResidenceDays: number; // Waktu tinggal aerosol di atmosfer (hari)
-  stratosphericInjection: boolean; // Apakah aerosol menembus tropopause Selat Sunda (~16.5 km)
-
-  // Kualitas Udara Puncak (Ground Peak)
-  peakPm25UgM3: number; // Konsentrasi puncak PM2.5 permukaan (ug/m3)
-  peakPm10UgM3: number; // Konsentrasi puncak PM10 permukaan (ug/m3)
-  ispuAqiCategory: 'BAIK' | 'SEDANG' | 'TIDAK SEHAT' | 'SANGAT TIDAK SEHAT' | 'BERBAHAYA';
+  meanRadiusMicrons: number; // Radius efektif droplet aerosol sulfat (μm)
+  stokesSettlingVelocityMps: number; // Kecepatan pengendapan gravitasi Stokes (m/s)
 }
 
-export interface RegionalAerosolStation {
+export interface StationInfo {
   id: string;
   name: string;
   province: string;
-  coords: [number, number];
   distKm: number;
   bearingDeg: number;
   bearingCardinal: string;
@@ -60,106 +49,97 @@ export interface RegionalAerosolStation {
 }
 
 export interface StationAerosolEvaluation {
-  station: RegionalAerosolStation;
+  station: StationInfo;
   inPlumePath: boolean;
-  angularDevDeg: number;
   etaHours: number;
   pm25UgM3: number;
-  pm10UgM3: number;
   aod550: number;
   visibilityKm: number;
   ispuCategory: 'BAIK' | 'SEDANG' | 'TIDAK SEHAT' | 'SANGAT TIDAK SEHAT' | 'BERBAHAYA';
+  angularDevDeg: number;
   healthAdvisory: string;
 }
 
 /**
- * Daftar Stasiun Pengamatan & Kawasan Pemukiman Pesisir Selat Sunda
+ * Daftar Stasiun Pemantauan Kualitas Udara & Titik Pesisir Selat Sunda
  */
-export const AEROSOL_OBSERVATION_STATIONS: RegionalAerosolStation[] = [
+export const COASTAL_AEROSOL_STATIONS: StationInfo[] = [
+  {
+    id: 'sta-sebesi',
+    name: 'Pulau Sebesi',
+    province: 'Lampung',
+    distKm: 18.5,
+    bearingDeg: 26,
+    bearingCardinal: 'Utara-Timur Laut',
+    population: '2.814 jiwa',
+  },
   {
     id: 'sta-anyer',
-    name: 'Anyer Pesisir',
+    name: 'Anyer',
     province: 'Banten',
-    coords: [-6.0500, 105.9200],
     distKm: 55.3,
     bearingDeg: 84,
     bearingCardinal: 'Timur',
-    population: '±58.000 jiwa',
-  },
-  {
-    id: 'sta-cilegon',
-    name: 'Kawasan Industri Cilegon',
-    province: 'Banten',
-    coords: [-6.0170, 106.0500],
-    distKm: 70.8,
-    bearingDeg: 78,
-    bearingCardinal: 'Timur-Timur Laut',
-    population: '±450.000 jiwa',
-  },
-  {
-    id: 'sta-merak',
-    name: 'Pelabuhan Merak',
-    province: 'Banten',
-    coords: [-5.9320, 105.9980],
-    distKm: 65.4,
-    bearingDeg: 69,
-    bearingCardinal: 'Timur-Timur Laut',
-    population: 'Pusat Feri Jawa-Sumatra',
+    population: '58.000 jiwa',
   },
   {
     id: 'sta-carita',
     name: 'Carita & Labuan',
     province: 'Banten',
-    coords: [-6.3000, 105.8300],
     distKm: 49.5,
     bearingDeg: 116,
     bearingCardinal: 'Tenggara',
-    population: '±75.000 jiwa',
+    population: '84.000 jiwa',
   },
   {
     id: 'sta-bakauheni',
-    name: 'Bakauheni Lampung',
+    name: 'Pelabuhan Bakauheni',
     province: 'Lampung',
-    coords: [-5.8670, 105.7500],
     distKm: 44.8,
     bearingDeg: 54,
     bearingCardinal: 'Timur Laut',
-    population: 'Pintu Gerbang Sumatra',
+    population: '22.000 jiwa',
   },
   {
     id: 'sta-kalianda',
-    name: 'Kalianda Lampung Selatan',
+    name: 'Kalianda',
     province: 'Lampung',
-    coords: [-5.7400, 105.6200],
     distKm: 45.9,
     bearingDeg: 28,
     bearingCardinal: 'Utara-Timur Laut',
-    population: '±95.000 jiwa',
+    population: '92.000 jiwa',
   },
   {
-    id: 'sta-bandarlampung',
-    name: 'Kota Bandar Lampung',
+    id: 'sta-cilegon',
+    name: 'Cilegon & Merak',
+    province: 'Banten',
+    distKm: 68.2,
+    bearingDeg: 62,
+    bearingCardinal: 'Timur Laut',
+    population: '434.000 jiwa',
+  },
+  {
+    id: 'sta-panimbang',
+    name: 'Panimbang & Tj. Lesung',
+    province: 'Banten',
+    distKm: 58.0,
+    bearingDeg: 135,
+    bearingCardinal: 'Tenggara',
+    population: '52.000 jiwa',
+  },
+  {
+    id: 'sta-rajabasa',
+    name: 'Kecamatan Rajabasa',
     province: 'Lampung',
-    coords: [-5.4297, 105.2625],
-    distKm: 81.2,
-    bearingDeg: 345,
-    bearingCardinal: 'Utara-Barat Laut',
-    population: '±1.150.000 jiwa',
-  },
-  {
-    id: 'sta-jakarta',
-    name: 'DKI Jakarta / Tangerang',
-    province: 'DKI Jakarta',
-    coords: [-6.1754, 106.8272],
-    distKm: 156.0,
-    bearingDeg: 83,
-    bearingCardinal: 'Timur',
-    population: '>12.000.000 jiwa',
+    distKm: 41.2,
+    bearingDeg: 18,
+    bearingCardinal: 'Utara',
+    population: '48.000 jiwa',
   },
 ];
 
 /**
- * Menghitung parameter aerosol komprehensif berdasarkan input erupsi dan meteorologi
+ * Hitung Parameter Fisika Aerosol Sekunder Vulkanik
  */
 export function calculateVolcanicAerosols(params: AerosolSimulationParams): AerosolMetrics {
   const {
@@ -167,206 +147,175 @@ export function calculateVolcanicAerosols(params: AerosolSimulationParams): Aero
     relativeHumidityPct,
     uvRadiationIndex,
     plumeHeightM,
-    windSpeedMs,
     elapsedHours,
   } = params;
 
-  // 1. Laju Oksidasi Kimiawi Atmosfer (Gas-to-Particle Conversion)
-  // Reaksi fotokimia: SO2 + OH* -> H2SO4
-  // Dipengaruhi oleh radiasi UV (pembentukan radikal OH) dan kelembaban (fase aqueous/cair)
-  const baseRate = 0.012; // 1.2% per jam pada kondisi dasar
-  const uvFactor = 0.5 + (uvRadiationIndex / 10) * 0.8; // 0.5 - 1.46
-  const rhFactor = 0.8 + Math.pow(relativeHumidityPct / 100, 1.5) * 0.7; // 0.8 - 1.5
-  
-  // Laju konversi total (% per jam, tipikal 1.5% - 3.8%/jam di iklim tropis Selat Sunda)
-  const oxidationRatePctPerHour = Number((baseRate * uvFactor * rhFactor * 100).toFixed(2));
-  const kOxidation = oxidationRatePctPerHour / 100; // satuan 1/jam
+  // 1. Kinetika Oksidasi Fotokimia SO2 -> H2SO4
+  // Dipengaruhi oleh konsentrasi radikal hidroksil [OH] (berkorelasi linier dengan indeks UV)
+  // Serta kelembaban relatif atmosfer yang mempercepat reaksi fasa cair (aqueous-phase oxidation)
+  const uvFactor = Math.pow(Math.max(1, uvRadiationIndex) / 8, 0.75);
+  const rhFactor = 0.8 + (Math.max(40, Math.min(100, relativeHumidityPct)) / 100) * 0.4;
+  const baseKinetikaPct = 1.35; // % per jam dalam kondisi standar tropis
+  const oxidationRatePctPerHour = parseFloat(
+    Math.min(5.5, Math.max(0.15, baseKinetikaPct * uvFactor * rhFactor)).toFixed(2)
+  );
 
-  // Rasio konversi massa molekul: SO2 (64.06 g/mol) -> H2SO4 (98.08 g/mol) + H2O hidrat (~25% massa)
-  // Massa aerosol sulfat hidrat = 1.53 * 1.25 ~= 1.91 x massa SO2 yang teroksidasi
-  const massMultiplier = 1.88;
-
-  // Laju emisi SO2 per jam (kg/jam)
+  // Rasio konversi massa molar: SO2 (64 g/mol) -> H2SO4 (98 g/mol) = rasio 1.53x
+  // Ditambah hidrasi molekul air (H2SO4 · nH2O) menghasilkan massa aerosol cair ~1.85x
+  const massConversionFactor = 1.65;
   const so2KgPerHour = (so2EmissionRateTonsPerDay * 1000) / 24;
+  const sulfateProductionKgPerHour = Math.round(
+    so2KgPerHour * (oxidationRatePctPerHour / 100) * massConversionFactor
+  );
 
-  // Laju produksi aerosol sulfat baru per jam (kg/jam)
-  const sulfateProductionKgPerHour = Number((so2KgPerHour * kOxidation * massMultiplier).toFixed(1));
+  // Akumulasi massa sulfat setelah T jam
+  const cumulativeSulfateMassTons = parseFloat(
+    (((sulfateProductionKgPerHour * Math.max(0.1, elapsedHours)) / 1000)).toFixed(1)
+  );
 
-  // Akumulasi massa sulfat setelah elapsedHours
-  const effectiveHours = Math.max(0.1, elapsedHours);
-  const fractionConverted = 1 - Math.exp(-kOxidation * effectiveHours);
-  const totalSo2EmittedTons = (so2EmissionRateTonsPerDay / 24) * effectiveHours;
-  const cumulativeSulfateMassTons = Number((totalSo2EmittedTons * fractionConverted * massMultiplier).toFixed(2));
+  // 2. Aerosol Optical Depth (AOD pada 550 nm)
+  // Cross-section koefisien massa kepunahan (mass extinction efficiency) beta_ext ~ 4.5 m2/g untuk sulfat sub-mikron
+  // Kolom vertikal aerosol diencerkan oleh difusi turbulen dan adveksi angin
+  const effectiveDispersionAreaKm2 = Math.max(
+    15,
+    Math.PI * Math.pow(Math.max(2, (params.windSpeedMs * 3.6 * elapsedHours * 0.25)), 2)
+  );
+  const columnDensityGM2 = (cumulativeSulfateMassTons * 1e6) / (effectiveDispersionAreaKm2 * 1e6);
+  const massExtinction = 4.2; // m2/g
+  const calcAod = Math.max(0.08, columnDensityGM2 * massExtinction * 0.35 + (plumeHeightM / 4000) * 0.3);
+  const peakAod550 = parseFloat(calcAod.toFixed(3));
 
-  // 2. Sifat Mikrofisika Partikel
-  // Aerosol vulkanik didominasi akumulasi sulfat cair (radius 0.15 - 0.75 um)
-  // Semakin lembab atmosfer, partikel bersifat higroskopis dan membesar
-  const meanRadiusMicrons = Number((0.25 + (relativeHumidityPct / 100) * 0.35 + Math.min(0.2, effectiveHours * 0.02)).toFixed(3));
-  
-  let dominantMode: 'Nucleation' | 'Aitken' | 'Accumulation' | 'Coarse' = 'Accumulation';
-  if (meanRadiusMicrons < 0.05) dominantMode = 'Nucleation';
-  else if (meanRadiusMicrons < 0.1) dominantMode = 'Aitken';
-  else if (meanRadiusMicrons <= 1.0) dominantMode = 'Accumulation';
-  else dominantMode = 'Coarse';
+  let aodCategory: AerosolMetrics['aodCategory'] = 'Ringan';
+  if (peakAod550 > 2.0) aodCategory = 'Ekstrem';
+  else if (peakAod550 > 1.0) aodCategory = 'Pekat';
+  else if (peakAod550 > 0.4) aodCategory = 'Sedang';
+  else if (peakAod550 > 0.15) aodCategory = 'Ringan';
+  else aodCategory = 'Bersih';
 
-  // Kecepatan Pengendapan Stokes (Stokes' Terminal Settling Velocity)
-  // vs = 2 * r^2 * (rho_p - rho_a) * g / (9 * eta)
-  const rMeters = meanRadiusMicrons * 1e-6;
-  const rhoParticle = 1650; // Densitas droplet asam sulfat terhidrasi (kg/m3)
-  const rhoAir = 1.225; // kg/m3
-  const g = 9.81;
-  const etaAir = 1.81e-5; // Pa.s
-  const stokesSettlingVelocityMps = Number(((2 / 9) * ((rhoParticle - rhoAir) * g * Math.pow(rMeters, 2)) / etaAir).toFixed(7));
+  // Reduksi radiasi matahari (Hukum Beer-Lambert: I/I0 = exp(-tau))
+  const solarRadiationAttenuationPct = parseFloat(
+    (Math.min(94, (1 - Math.exp(-peakAod550 * 0.85)) * 100)).toFixed(1)
+  );
 
-  // Tropopause di kawasan khatulistiwa Selat Sunda berada di sekitar 16.500 m
-  const stratosphericInjection = plumeHeightM >= 16500;
+  // 3. Radiative Forcing Pendinginan Global/Regional (W/m2)
+  // Model Charlson et al.: Delta F_R ≈ -28.5 * AOD (W/m2)
+  const radiativeForcingWm2 = parseFloat((-28.5 * Math.min(3.5, peakAod550)).toFixed(1));
 
-  // Waktu tinggal di atmosfer (Troposphere: 5-14 hari; Stratosphere: 6-24 bulan)
+  // Estimasi penurunan suhu permukaan lokal (Klimatologi mikro: sensitivitas iklim regional ~0.02 - 0.05 °C per W/m2)
+  const surfaceCoolingDeltaC = parseFloat(
+    (Math.min(2.5, Math.abs(radiativeForcingWm2) * 0.022)).toFixed(2)
+  );
+
+  // 4. Stratospheric Injection & Waktu Tinggal
+  // Ketinggian tropopause di Selat Sunda (lintang khatulistiwa ~6°S) adalah sekitar 16.000 meter (16 km)
+  const stratosphericInjection = plumeHeightM >= 15500;
   const atmosphericResidenceDays = stratosphericInjection
-    ? Number((180 + (plumeHeightM - 16500) * 0.05).toFixed(0))
-    : Number(Math.max(3, 12 - (relativeHumidityPct / 100) * 5).toFixed(1));
+    ? Math.round(120 + (plumeHeightM / 1000) * 15)
+    : Math.max(2, Math.round(4 + (plumeHeightM / 1000) * 2.5));
 
-  // 3. Ketebalan Optik Aerosol (AOD pada 550 nm, tau_550)
-  // tau = mass_extinction_efficiency * column_mass_density
-  // Efisiensi ekstingsi massa spesifik sulfat hidrat: ~ 4.8 m2/g
-  const massExtinctionEfficiencyM2g = 4.8;
-  const windDilutionFactor = Math.max(1.5, windSpeedMs);
-  const plumeColumnDensityGm2 = (so2KgPerHour * 0.001 * (1 + fractionConverted * 0.8)) / (windDilutionFactor * Math.max(500, plumeHeightM * 0.4));
-  const peakAod550 = Number(Math.min(5.0, Math.max(0.05, plumeColumnDensityGm2 * massExtinctionEfficiencyM2g * 2.5)).toFixed(2));
+  // Radius rata-rata droplet sulfat (sub-mikron 0.2 - 0.6 um)
+  const meanRadiusMicrons = stratosphericInjection ? 0.32 : 0.45;
 
-  let aodCategory: 'Jernih' | 'Kabut Tipis' | 'Moderat' | 'Pekat' | 'Ekstrem' = 'Jernih';
-  if (peakAod550 < 0.15) aodCategory = 'Jernih';
-  else if (peakAod550 < 0.45) aodCategory = 'Kabut Tipis';
-  else if (peakAod550 < 1.0) aodCategory = 'Moderat';
-  else if (peakAod550 < 2.5) aodCategory = 'Pekat';
-  else aodCategory = 'Ekstrem';
+  // Kecepatan pengendapan Stokes: v = (2/9) * rho * g * r^2 / eta
+  // rho_sulfate ~ 1700 kg/m3, g = 9.81 m/s2, eta_air ~ 1.8e-5 Pa.s
+  const rMeters = meanRadiusMicrons * 1e-6;
+  const stokesSettlingVelocityMps = (2 / 9) * 1700 * 9.81 * Math.pow(rMeters, 2) / 1.8e-5;
 
-  // Pelemahan Radiasi Surya Langsung (Hukum Beer-Lambert: I / I0 = exp(-tau))
-  const solarTransmission = Math.exp(-peakAod550);
-  const solarRadiationAttenuationPct = Number(((1 - solarTransmission) * 100).toFixed(1));
-
-  // Radiative Forcing (W/m2)
-  // Delta F ~= - (S0 / 4) * (1 - As)^2 * (2 * T_atm^2) * beta * tau ~= -28 * tau
-  const radiativeForcingWm2 = Number((-28.5 * peakAod550).toFixed(1));
-
-  // Estimasi Pendinginan Suhu Permukaan Lokal
-  // Delta T = lambda * Delta F (dengan sensitivitas iklim lambda ~ 0.06 - 0.12 K / (W/m2))
-  const surfaceCoolingDeltaC = Number((Math.abs(radiativeForcingWm2) * 0.085).toFixed(2));
-
-  // 4. Konsentrasi Puncak Ground PM2.5 & PM10 (ug/m3)
-  // Partikel aerosol sulfat sekunder berada dominan pada fraksi halus PM2.5
-  const baselinePlumeConcentration = (so2EmissionRateTonsPerDay * 12.5) / (windDilutionFactor * 0.8);
-  const peakPm25UgM3 = Number(Math.min(950, Math.max(5, baselinePlumeConcentration * 0.72)).toFixed(1));
-  const peakPm10UgM3 = Number(Math.min(1500, peakPm25UgM3 * 1.45).toFixed(1));
-
-  let ispuAqiCategory: 'BAIK' | 'SEDANG' | 'TIDAK SEHAT' | 'SANGAT TIDAK SEHAT' | 'BERBAHAYA' = 'BAIK';
-  if (peakPm25UgM3 <= 15) ispuAqiCategory = 'BAIK';
-  else if (peakPm25UgM3 <= 55) ispuAqiCategory = 'SEDANG';
-  else if (peakPm25UgM3 <= 150) ispuAqiCategory = 'TIDAK SEHAT';
-  else if (peakPm25UgM3 <= 250) ispuAqiCategory = 'SANGAT TIDAK SEHAT';
-  else ispuAqiCategory = 'BERBAHAYA';
+  // Estimasi Puncak Konsentrasi PM2.5 di permukaan (ug/m3)
+  const peakPm25UgM3 = Math.round(Math.min(500, Math.max(25, cumulativeSulfateMassTons * 12 + (plumeHeightM / 15))));
 
   return {
     oxidationRatePctPerHour,
     sulfateProductionKgPerHour,
     cumulativeSulfateMassTons,
-    massMultiplier,
     peakAod550,
+    peakPm25UgM3,
     aodCategory,
     solarRadiationAttenuationPct,
     radiativeForcingWm2,
     surfaceCoolingDeltaC,
-    dominantMode,
+    stratosphericInjection,
+    atmosphericResidenceDays,
     meanRadiusMicrons,
     stokesSettlingVelocityMps,
-    atmosphericResidenceDays,
-    stratosphericInjection,
-    peakPm25UgM3,
-    peakPm10UgM3,
-    ispuAqiCategory,
   };
 }
 
 /**
- * Mengevaluasi sebaran aerosol ke stasiun-stasiun wilayah pesisir
+ * Evaluasi Dampak Dispersi Aerosol ke Jaringan Stasiun Pemantau Pesisir Selat Sunda
  */
 export function evaluateRegionalAerosolStations(
   params: AerosolSimulationParams,
   metrics: AerosolMetrics
 ): StationAerosolEvaluation[] {
-  // Arah hembusan awan aerosol downwind: (windDirection + 180) % 360
-  const driftDeg = (params.windDirectionDeg + 180) % 360;
-  const windSpeedKmh = Math.max(10, params.windSpeedMs * 3.6);
+  const { windDirectionDeg, windSpeedMs, elapsedHours } = params;
 
-  return AEROSOL_OBSERVATION_STATIONS.map((station) => {
-    // Hitung deviasi sudut
-    let angularDev = Math.abs(station.bearingDeg - driftDeg);
-    if (angularDev > 180) angularDev = 360 - angularDev;
+  // Arah pergerakan abu / awan aerosol (drift angle = arah angin datang + 180°)
+  const driftDeg = (windDirectionDeg + 180) % 360;
+  const windSpeedKmh = Math.max(1, windSpeedMs * 3.6);
+  const plumeFrontReachKm = windSpeedKmh * Math.max(0.5, elapsedHours);
+  const coneHalfAngleDeg = 32; // Sudut sebaran kerucut dispersi Gaussian
 
-    // Lebar kerucut aerosol lebih luas daripada abu padat (karena difusi gas SO2 dan droplet mikro)
-    const coneHalfWidthDeg = 36 + Math.min(22, params.elapsedHours * 1.8);
-    const inPlumePath = angularDev <= coneHalfWidthDeg;
+  return COASTAL_AEROSOL_STATIONS.map((station) => {
+    // Selisih sudut antara vektor hanyutan plume dan bearing stasiun
+    const angularDiff = Math.abs(((station.bearingDeg - driftDeg + 180) % 360) - 180);
+    const inPlumePath = angularDiff <= coneHalfAngleDeg && station.distKm <= plumeFrontReachKm * 1.35;
 
-    // Waktu tiba aerosol (jam)
-    const etaHours = Number((station.distKm / windSpeedKmh).toFixed(1));
-    const hasArrived = params.elapsedHours >= etaHours;
+    // Estimasi waktu tempuh kedatangan (ETA jam)
+    const etaHours = parseFloat((station.distKm / windSpeedKmh).toFixed(1));
 
-    let pm25UgM3 = 8.5; // Konsentrasi latar belakang laut tropis
-    let pm10UgM3 = 14.0;
-    let aod550 = 0.08;
-    let visibilityKm = 25.0;
-    let ispuCategory: 'BAIK' | 'SEDANG' | 'TIDAK SEHAT' | 'SANGAT TIDAK SEHAT' | 'BERBAHAYA' = 'BAIK';
-    let healthAdvisory = 'Kualitas udara sangat baik. Udara pesisir bersih dan aman untuk beraktivitas.';
+    // Konsentrasi partikulat halus PM2.5 di permukaan (ug/m3)
+    let pm25UgM3 = 18; // Baseline udara maritim bersih
+    let stationAod = 0.12;
 
     if (inPlumePath) {
-      // Peluruhan konsentrasi terhadap jarak (dispersi Gaussian transversal + peluruhan eksponensial)
-      const distDecay = Math.exp(-0.016 * station.distKm);
-      const angleDecay = Math.exp(-0.5 * Math.pow(angularDev / (coneHalfWidthDeg * 0.45), 2));
-      const effectiveIntensity = hasArrived ? 1.0 : Math.max(0.1, params.elapsedHours / Math.max(0.1, etaHours));
+      // Gaussian attenuation seiring bertambahnya deviasi sudut dan jarak
+      const angleWeight = Math.cos((angularDiff / coneHalfAngleDeg) * (Math.PI / 2));
+      const distWeight = Math.max(0.08, 1 - (station.distKm / 120));
+      const sourceIntensity = Math.min(450, metrics.cumulativeSulfateMassTons * 8 + (params.plumeHeightM / 10));
 
-      const addedPm25 = metrics.peakPm25UgM3 * distDecay * angleDecay * effectiveIntensity;
-      pm25UgM3 = Number((8.5 + addedPm25).toFixed(1));
-      pm10UgM3 = Number((14.0 + addedPm25 * 1.4).toFixed(1));
-      
-      const addedAod = metrics.peakAod550 * distDecay * angleDecay * effectiveIntensity;
-      aod550 = Number(Math.max(0.08, addedAod).toFixed(2));
-
-      // Visibilitas atmosfer (Hukum Koschmieder: Visibilitas ~= 3.912 / Extinction_Coefficient)
-      const extCoeff = 0.02 + aod550 * 0.15;
-      visibilityKm = Number(Math.max(0.4, Math.min(25, 3.912 / extCoeff)).toFixed(1));
-
-      if (pm25UgM3 > 250) {
-        ispuCategory = 'BERBAHAYA';
-        healthAdvisory = 'Bahaya akut aerosol asam sulfat & partikulat vulkanik. Wajib masker respirator (N95/P100), tutup rapat ventilasi ruangan.';
-      } else if (pm25UgM3 > 150) {
-        ispuCategory = 'SANGAT TIDAK SEHAT';
-        healthAdvisory = 'Konsentrasi droplet aerosol sulfat tinggi. Hindari aktivitas luar ruang, iritasi mata dan saluran napas dapat terjadi.';
-      } else if (pm25UgM3 > 55) {
-        ispuCategory = 'TIDAK SEHAT';
-        healthAdvisory = 'Kelompok rentan (anak, lansia, penderita asma) berpotensi mengalami gangguan pernapasan. Disarankan mengenakan masker.';
-      } else if (pm25UgM3 > 15) {
-        ispuCategory = 'SEDANG';
-        healthAdvisory = 'Tampak kabut aerosol tipis (volcanic haze). Kondisi masih dapat ditoleransi oleh masyarakat umum.';
+      const addedPm25 = sourceIntensity * angleWeight * distWeight;
+      pm25UgM3 = Math.round(18 + addedPm25);
+      stationAod = parseFloat(Math.min(3.5, 0.12 + (metrics.peakAod550 * angleWeight * distWeight)).toFixed(2));
+    } else {
+      // Pengaruh difusi latar belakang tipis jika berdekatan
+      if (angularDiff <= 60 && station.distKm <= plumeFrontReachKm) {
+        pm25UgM3 = Math.round(18 + 12 * Math.max(0, 1 - angularDiff / 60));
+        stationAod = parseFloat((0.12 + 0.08 * Math.max(0, 1 - angularDiff / 60)).toFixed(2));
       }
-    } else if (angularDev <= coneHalfWidthDeg + 15) {
+    }
+
+    // Visibilitas horizontal Koschmieder: V (km) ≈ 3.912 / beta_ext
+    const betaExtStation = Math.max(0.08, (pm25UgM3 / 25) * 0.45);
+    const visibilityKm = parseFloat(Math.min(35, Math.max(0.8, 3.912 / betaExtStation)).toFixed(1));
+
+    // Klasifikasi Indeks Standar Pencemar Udara (ISPU) sesuai Permen LHK No. 14 Tahun 2020
+    let ispuCategory: StationAerosolEvaluation['ispuCategory'] = 'BAIK';
+    let healthAdvisory = 'Kualitas udara aman. Aktivitas luar ruangan dapat berjalan normal.';
+
+    if (pm25UgM3 > 250) {
+      ispuCategory = 'BERBAHAYA';
+      healthAdvisory = 'Tingkat polusi berbahaya! Wajib mengenakan masker respirator N95, hindari semua aktivitas luar ruangan, tutup ventilasi rumah.';
+    } else if (pm25UgM3 > 150) {
+      ispuCategory = 'SANGAT TIDAK SEHAT';
+      healthAdvisory = 'Kualitas udara sangat tidak sehat. Kelompok rentan (anak-anak, lansia, penderita asma) harus tetap berada di dalam ruangan tertutup.';
+    } else if (pm25UgM3 > 55) {
+      ispuCategory = 'TIDAK SEHAT';
+      healthAdvisory = 'Konsentrasi aerosol sulfat dan abu halus meningkat. Gunakan masker saat beraktivitas di luar dan batasi durasi paparan.';
+    } else if (pm25UgM3 > 35) {
       ispuCategory = 'SEDANG';
-      pm25UgM3 = 18.0;
-      pm10UgM3 = 26.0;
-      aod550 = 0.18;
-      visibilityKm = 18.0;
-      healthAdvisory = 'Berada di batas tepi koridor angin. Waspadai jika terjadi perubahan arah angin laut/darat (sea breeze inversion).';
+      healthAdvisory = 'Kualitas udara dalam batas moderat. Masyarakat sensitif disarankan mengurangi aktivitas fisik berat di ruang terbuka.';
     }
 
     return {
       station,
       inPlumePath,
-      angularDevDeg: Math.round(angularDev),
       etaHours,
       pm25UgM3,
-      pm10UgM3,
-      aod550,
+      aod550: stationAod,
       visibilityKm,
       ispuCategory,
+      angularDevDeg: Math.round(angularDiff),
       healthAdvisory,
     };
   });

@@ -74,6 +74,7 @@ import { BallisticParams, PlumeParams, KrakatauWeather } from '../types';
 import { computeTrajectory3D, computeTrajectory, computeBallisticShower, ShowerBomb } from '../physics/ballistics';
 import { AshDispersalDetailModal } from './AshDispersalDetailModal';
 import { VolcanicEjectaDetailModal } from './VolcanicEjectaDetailModal';
+import { SatelliteEjectaParticleOverlay, ParticleDensityMode } from './SatelliteEjectaParticleOverlay';
 import {
   BMKG_AFFECTED_AREAS,
   BMKG_SIGMET_SCENARIOS,
@@ -119,10 +120,11 @@ interface RealSatelliteMapProps {
   onOpenAerosolModal?: () => void;
   selectedPreset?: EruptionPresetId;
   onOpenBmkgModal?: () => void;
+  triggerCount?: number;
 }
 
 // Vent coordinate: Gunung Anak Krakatau Crater (WGS84)
-const CRATER_COORDS: [number, number] = [-6.1021, 105.4230];
+export const CRATER_COORDS: [number, number] = [-6.1021, 105.4230];
 
 interface GeoPoint {
   id: string;
@@ -344,6 +346,7 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
   onOpenAerosolModal,
   selectedPreset,
   onOpenBmkgModal,
+  triggerCount = 0,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -362,33 +365,33 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
   const so2GroupRef = useRef<L.LayerGroup | null>(null);
   const regionalGroupRef = useRef<L.LayerGroup | null>(null);
 
-  // States
-  const [selectedTile, setSelectedTile] = useState<TileProvider>('dark');
-  const [showMaxBallisticRadius, setShowMaxBallisticRadius] = useState<boolean>(true);
+  // States - Clean default settings without blurry/messy overlapping boundaries
+  const [selectedTile, setSelectedTile] = useState<TileProvider>('satellite');
+  const [showMaxBallisticRadius, setShowMaxBallisticRadius] = useState<boolean>(false);
   const [showActiveTrajectory, setShowActiveTrajectory] = useState<boolean>(true);
-  const [showUmbrellaCloud, setShowUmbrellaCloud] = useState<boolean>(true);
-  const [showAshPlumeCones, setShowAshPlumeCones] = useState<boolean>(true);
+  const [showUmbrellaCloud, setShowUmbrellaCloud] = useState<boolean>(false);
+  const [showAshPlumeCones, setShowAshPlumeCones] = useState<boolean>(false);
   const [showWindVector, setShowWindVector] = useState<boolean>(true);
-  const [showRadiusLabels, setShowRadiusLabels] = useState<boolean>(true);
+  const [showRadiusLabels, setShowRadiusLabels] = useState<boolean>(false);
   const [showKRBZones, setShowKRBZones] = useState<boolean>(true);
   const [showLandmarks, setShowLandmarks] = useState<boolean>(true);
-  const [showShipping, setShowShipping] = useState<boolean>(true);
+  const [showShipping, setShowShipping] = useState<boolean>(false);
 
-  // Flight Level & Atmospheric Gas Indicators (Inspired by abu.cikoytew.my.id)
+  // Flight Level & Atmospheric Gas Indicators (disabled by default for clean view)
   const [selectedFlightLevel, setSelectedFlightLevel] = useState<FlightLevelKey>('ALL');
-  const [showSo2Layer, setShowSo2Layer] = useState<boolean>(true);
+  const [showSo2Layer, setShowSo2Layer] = useState<boolean>(false);
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
 
-  // Population Density & Coastal Hazard Heatmap States
-  const [showHazardHeatmap, setShowHazardHeatmap] = useState<boolean>(true);
+  // Population Density & Coastal Hazard Heatmap States (disabled by default to keep coastlines crisp)
+  const [showHazardHeatmap, setShowHazardHeatmap] = useState<boolean>(false);
   const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('composite');
   const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.75);
   const [selectedHeatNodeId, setSelectedHeatNodeId] = useState<string | null>(null);
 
-  // BMKG Official Layer & Affected Areas States
-  const [showBmkgSigmet, setShowBmkgSigmet] = useState<boolean>(true);
-  const [showBmkgAshDeposit, setShowBmkgAshDeposit] = useState<boolean>(true);
-  const [showBmkgAffectedAreas, setShowBmkgAffectedAreas] = useState<boolean>(true);
+  // BMKG Official Layer & Affected Areas States (available via toggle/modal)
+  const [showBmkgSigmet, setShowBmkgSigmet] = useState<boolean>(false);
+  const [showBmkgAshDeposit, setShowBmkgAshDeposit] = useState<boolean>(false);
+  const [showBmkgAffectedAreas, setShowBmkgAffectedAreas] = useState<boolean>(false);
   const [isBmkgModalOpen, setIsBmkgModalOpen] = useState<boolean>(false);
   const [activeBmkgScenarioId, setActiveBmkgScenarioId] = useState<string>('sigmet-west-monsoon');
 
@@ -410,7 +413,37 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
 
   // Unified Drawer & Dock UI states (eliminates colliding cards)
   const [activeDrawer, setActiveDrawer] = useState<'impact' | 'layers' | 'analysis' | 'bmkg' | 'weather' | 'aerosol' | null>(null);
-  const [activeAnimTab, setActiveAnimTab] = useState<'ballistic' | 'smoke'>('ballistic');
+  const [activeAnimTab, setActiveAnimTab] = useState<'ballistic' | 'particles' | 'smoke'>('ballistic');
+
+  // Ejecta Particle System Overlay States
+  const [showParticleOverlay, setShowParticleOverlay] = useState<boolean>(true);
+  const [isParticlePlaying, setIsParticlePlaying] = useState<boolean>(true);
+  const [particleDensity, setParticleDensity] = useState<ParticleDensityMode>('standard');
+  const [continuousEmission, setContinuousEmission] = useState<boolean>(false);
+  const [particleBurstTrigger, setParticleBurstTrigger] = useState<number>(0);
+  const [particleStats, setParticleStats] = useState<{
+    airborneCount: number;
+    landedCount: number;
+    maxAltitudeM: number;
+    maxDistKm: number;
+    impactEnergyTotalMJ: number;
+  }>({
+    airborneCount: 0,
+    landedCount: 0,
+    maxAltitudeM: 0,
+    maxDistKm: 0,
+    impactEnergyTotalMJ: 0,
+  });
+
+  const prevTriggerCountRef = useRef<number>(triggerCount);
+  useEffect(() => {
+    if (triggerCount > 0 && triggerCount !== prevTriggerCountRef.current) {
+      prevTriggerCountRef.current = triggerCount;
+      setParticleBurstTrigger((prev) => prev + 1);
+      setShowParticleOverlay(true);
+      setIsParticlePlaying(true);
+    }
+  }, [triggerCount]);
 
   // Cursor inspector state
   const [cursorInfo, setCursorInfo] = useState<{
@@ -427,6 +460,14 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
     distKm: number;
     bearingDeg: number;
   } | null>(null);
+  const [isMeasuring, setIsMeasuring] = useState<boolean>(false);
+  const handleToggleMeasure = () => {
+    setIsMeasuring((prev) => {
+      const next = !prev;
+      if (!next) setPinnedMeasure(null);
+      return next;
+    });
+  };
   const measureLineRef = useRef<L.Polyline | null>(null);
 
   // === Physical Radius Metrics Calculations ===
@@ -724,46 +765,24 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
 
     if (!showKRBZones) return;
 
-    // KRB III - 5.0 km (Steril Danger Zone)
+    // Batas Resmi Zona Bahaya Steril 5.0 km (PVMBG Rekomendasi Resmi)
     const krb3 = L.circle(CRATER_COORDS, {
       radius: 5000,
       color: '#ef4444',
-      weight: 2,
-      dashArray: '8, 6',
+      weight: 2.2,
+      opacity: 0.9,
       fillColor: '#ef4444',
-      fillOpacity: 0.12,
+      fillOpacity: 0.08,
     });
     krb3.bindPopup(`
       <div class="p-2 text-xs font-sans text-zinc-100">
-        <div class="font-bold text-red-400 text-sm mb-1">⚠️ KRB III: Zona Steril 5.0 km (PVMBG)</div>
+        <div class="font-bold text-red-400 text-sm mb-1">⚠️ Batas Radius Bahaya Steril 5.0 km (PVMBG)</div>
         <p class="text-[11px] text-zinc-300">
-          Zona bahaya ekstrem yang terancam lontaran batu pijar/bom vulkanik, awan panas, dan gas beracun. Harus dikosongkan total.
+          Radius steril resmi dari kawah aktif Gunung Anak Krakatau. Masyarakat dilarang mendekati atau beraktivitas dalam batas 5 km.
         </p>
       </div>
     `);
     group.addLayer(krb3);
-
-    // KRB II - 7.5 km
-    const krb2 = L.circle(CRATER_COORDS, {
-      radius: 7500,
-      color: '#f59e0b',
-      weight: 1.2,
-      dashArray: '5, 8',
-      fillColor: '#f59e0b',
-      fillOpacity: 0.05,
-    });
-    group.addLayer(krb2);
-
-    // KRB I - 12.0 km
-    const krb1 = L.circle(CRATER_COORDS, {
-      radius: 12000,
-      color: '#71717a',
-      weight: 1,
-      dashArray: '4, 10',
-      fillColor: '#71717a',
-      fillOpacity: 0.03,
-    });
-    group.addLayer(krb1);
   }, [showKRBZones]);
 
   // 4. Render Projectile / Volcanic Bomb Radii & Trajectory
@@ -2576,18 +2595,31 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
     if (!activeTrajPts.length) return { t: 0, x: 0, y: 0, z: 0, speed: 0, vx: 0, vy: 0, vz: 0 };
     let idx = activeTrajPts.findIndex((p) => p.t >= ballisticTime);
     if (idx === -1) idx = activeTrajPts.length - 1;
-    return activeTrajPts[idx];
+    return activeTrajPts[idx] || { t: 0, x: 0, y: 0, z: 0, speed: 0, vx: 0, vy: 0, vz: 0 };
   }, [activeTrajPts, ballisticTime]);
 
-  const ballisticDistKm = Math.hypot(currentBallisticPt.x, currentBallisticPt.z) / 1000;
+  const ballisticDistKm = Math.hypot(currentBallisticPt?.x ?? 0, currentBallisticPt?.z ?? 0) / 1000;
   const isBallisticLanded = ballisticTime >= totalFlightTime;
   const rockMassKg = (4 / 3) * Math.PI * Math.pow(ballistic.rockDiameter / 2, 3) * ballistic.rockDensity;
-  const currentEnergyMJ = (0.5 * rockMassKg * Math.pow(currentBallisticPt.speed, 2)) / 1e6;
+  const currentEnergyMJ = (0.5 * rockMassKg * Math.pow(currentBallisticPt?.speed ?? 0, 2)) / 1e6;
 
   return (
     <div className="relative w-full min-h-[720px] h-[780px] rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl bg-black select-none group font-sans">
       {/* Leaflet DOM Mounting Container */}
       <div ref={mapContainerRef} className="w-full h-full z-0" />
+
+      {/* Particle System Canvas Overlay */}
+      <SatelliteEjectaParticleOverlay
+        map={mapInstanceRef.current}
+        ballistic={ballistic}
+        plume={plume}
+        showParticles={showParticleOverlay}
+        isPlaying={isParticlePlaying}
+        density={particleDensity}
+        triggerCount={particleBurstTrigger}
+        continuousEmission={continuousEmission}
+        onStatsChange={setParticleStats}
+      />
 
       {/* TOP BAR: Clean, Non-Colliding Situational Awareness & Navigation Bar */}
       <div className="absolute top-3 left-3 right-3 z-20 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
@@ -2650,6 +2682,23 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
           >
             <Ruler className="w-3 h-3" />
             <span className="hidden md:inline">{isMeasuring ? 'Ukur: Aktif' : 'Ukur Jarak'}</span>
+          </button>
+
+          {/* Quick Particle Overlay Toggle */}
+          <button
+            onClick={() => {
+              setShowParticleOverlay(!showParticleOverlay);
+              if (!showParticleOverlay) setIsParticlePlaying(true);
+            }}
+            className={`px-2 py-1 rounded-lg text-[10px] font-medium transition-all flex items-center gap-1 border ${
+              showParticleOverlay
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold shadow-sm'
+                : 'bg-zinc-900 text-zinc-400 hover:text-white border-zinc-800 hover:border-zinc-700'
+            }`}
+            title="Tampilkan / Sembunyikan Sistem Partikel Ejekta Vulkanik"
+          >
+            <Sparkles className="w-3 h-3" />
+            <span className="hidden sm:inline">Partikel Ejekta</span>
           </button>
         </div>
 
@@ -3441,25 +3490,31 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
                       <span>📍</span> Dampak Stasiun Pesisir (AOD & PM2.5)
                     </span>
                     <span className="text-[9px] font-mono text-zinc-400">
-                      {regionalAerosolStations.filter(s => s.impactLevel !== 'AMAN').length} Terdampak
+                      {regionalAerosolStations.filter(s => s.ispuCategory !== 'BAIK').length} Terdampak
                     </span>
                   </div>
 
                   <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar">
                     {regionalAerosolStations.map((st) => {
-                      const isWarn = st.impactLevel === 'KRITIS' || st.impactLevel === 'WASPADA';
+                      const isWarn = st.ispuCategory === 'BERBAHAYA' || st.ispuCategory === 'SANGAT TIDAK SEHAT' || st.ispuCategory === 'TIDAK SEHAT';
+                      const stDist = st.station?.distKm ?? (st as any).distanceKm ?? 0;
+                      const stBearing = st.station?.bearingDeg ?? 0;
+                      const stName = st.station?.name ?? (st as any).stationName ?? 'Stasiun Pesisir';
+                      const stId = st.station?.id ?? (st as any).stationId ?? String(Math.random());
+                      const stCoords = getCoordAtBearingAndDist(CRATER_COORDS, stBearing, stDist * 1000);
+
                       return (
                         <div
-                          key={st.stationId}
+                          key={stId}
                           onClick={() => {
                             if (mapInstanceRef.current) {
-                              mapInstanceRef.current.flyTo(st.coords, 12, { duration: 1.2 });
+                              mapInstanceRef.current.flyTo(stCoords, 12, { duration: 1.2 });
                             }
                           }}
                           className={`p-2 rounded-lg border text-[10.5px] cursor-pointer transition-all ${
-                            st.impactLevel === 'KRITIS'
+                            st.ispuCategory === 'BERBAHAYA' || st.ispuCategory === 'SANGAT TIDAK SEHAT'
                               ? 'bg-red-950/30 border-red-800/60 hover:bg-red-950/50'
-                              : st.impactLevel === 'WASPADA'
+                              : st.ispuCategory === 'TIDAK SEHAT' || st.ispuCategory === 'SEDANG'
                               ? 'bg-amber-950/30 border-amber-800/60 hover:bg-amber-950/50'
                               : 'bg-zinc-950/60 border-zinc-850 hover:bg-zinc-800/50'
                           }`}
@@ -3467,24 +3522,24 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
                           <div className="flex items-center justify-between font-bold">
                             <span className="text-white flex items-center gap-1">
                               <span>{isWarn ? '⚠️' : '✅'}</span>
-                              <span>{st.stationName}</span>
+                              <span>{stName}</span>
                             </span>
                             <span
                               className={`px-1.5 py-0.2 rounded text-[8.5px] font-mono font-bold ${
-                                st.impactLevel === 'KRITIS'
+                                st.ispuCategory === 'BERBAHAYA' || st.ispuCategory === 'SANGAT TIDAK SEHAT'
                                   ? 'bg-red-500 text-white'
-                                  : st.impactLevel === 'WASPADA'
+                                  : st.ispuCategory === 'TIDAK SEHAT' || st.ispuCategory === 'SEDANG'
                                   ? 'bg-amber-400 text-black'
                                   : 'bg-emerald-800 text-emerald-100'
                               }`}
                             >
-                              {st.impactLevel}
+                              {st.ispuCategory}
                             </span>
                           </div>
                           <div className="flex items-center justify-between text-zinc-400 font-mono text-[9.5px] mt-1">
-                            <span>Jarak: {st.distanceKm.toFixed(1)} km</span>
-                            <span>AOD: <strong className="text-sky-300">{st.aodEstimated}</strong></span>
-                            <span>PM2.5: <strong className="text-amber-300">{st.groundPm25UgM3} μg/m³</strong></span>
+                            <span>Jarak: {stDist.toFixed(1)} km</span>
+                            <span>AOD: <strong className="text-sky-300">{st.aod550 ?? (st as any).aodEstimated ?? '0.12'}</strong></span>
+                            <span>PM2.5: <strong className="text-amber-300">{st.pm25UgM3 ?? (st as any).groundPm25UgM3 ?? 18} μg/m³</strong></span>
                           </div>
                         </div>
                       );
@@ -3502,7 +3557,7 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
         <div className="bg-black/95 backdrop-blur-2xl border border-zinc-800 rounded-2xl p-3 shadow-2xl space-y-2.5 transition-all text-xs">
           {/* Top Bar of Dock: Animation Selection Tabs & Option Toggles */}
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-850 pb-2">
-            {/* Left: Tab Switchers for Ballistic vs Smoke Animation */}
+            {/* Left: Tab Switchers for Ballistic vs Particles vs Smoke Animation */}
             <div className="flex items-center gap-1 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800">
               <button
                 onClick={() => setActiveAnimTab('ballistic')}
@@ -3512,13 +3567,31 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
-                <span>💣 Animasi Lemparan Batu</span>
+                <span>💣 Bom Utama</span>
                 <span
                   className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold ${
                     showBallisticAnim ? 'bg-amber-400 text-black' : 'bg-zinc-800 text-zinc-500'
                   }`}
                 >
                   {showBallisticAnim ? 'AKTIF' : 'NONAKTIF'}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveAnimTab('particles')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  activeAnimTab === 'particles'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <span>✨ Partikel Ejekta</span>
+                <span
+                  className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold ${
+                    showParticleOverlay ? 'bg-amber-400 text-black' : 'bg-zinc-800 text-zinc-500'
+                  }`}
+                >
+                  {showParticleOverlay ? 'AKTIF' : 'NONAKTIF'}
                 </span>
               </button>
 
@@ -3530,7 +3603,7 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
-                <span>💨 Animasi Asap Vulkanik</span>
+                <span>💨 Asap Vulkanik</span>
                 <span
                   className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold ${
                     showSmokeAnim ? 'bg-white text-black' : 'bg-zinc-800 text-zinc-500'
@@ -3557,7 +3630,23 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
                       : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-750'
                   }`}
                 >
-                  <span>{showBallisticAnim ? 'Matikan Animasi Batu' : 'Nyalakan Animasi Batu'}</span>
+                  <span>{showBallisticAnim ? 'Matikan Animasi Bom' : 'Nyalakan Animasi Bom'}</span>
+                </button>
+              ) : activeAnimTab === 'particles' ? (
+                <button
+                  onClick={() => {
+                    const next = !showParticleOverlay;
+                    setShowParticleOverlay(next);
+                    if (next) setIsParticlePlaying(true);
+                    else setIsParticlePlaying(false);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all border shadow-sm ${
+                    showParticleOverlay
+                      ? 'bg-amber-500 hover:bg-amber-400 text-black border-amber-400'
+                      : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-750'
+                  }`}
+                >
+                  <span>{showParticleOverlay ? 'Matikan Partikel' : 'Nyalakan Partikel'}</span>
                 </button>
               ) : (
                 <button
@@ -3655,12 +3744,12 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
                     <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-300">
                       <span>Waktu Terbang: <strong className="text-white">{ballisticTime.toFixed(1)}s</strong> / {totalFlightTime.toFixed(1)}s</span>
                       <span className="text-zinc-600">|</span>
-                      <span>Tinggi Bom Utama: <strong className="text-amber-400">{currentBallisticPt.y.toFixed(0)}m</strong></span>
+                      <span>Tinggi Bom Utama: <strong className="text-amber-400">{(currentBallisticPt?.y ?? 0).toFixed(0)}m</strong></span>
                       <span className="text-zinc-600">|</span>
                       {radiusMetrics.ballisticShower.length > 1 ? (
                         <span>Status: <strong className="text-orange-400">{radiusMetrics.ballisticShower.filter((b) => ballisticTime >= b.traj.flightTime).length} / {radiusMetrics.ballisticShower.length} Mendarat</strong></span>
                       ) : (
-                        <span>Jarak: <strong className="text-white">{ballisticDistKm.toFixed(2)} km</strong></span>
+                        <span>Jarak: <strong className="text-white">{(ballisticDistKm ?? 0).toFixed(2)} km</strong></span>
                       )}
                     </div>
                   </div>
@@ -3684,7 +3773,7 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
                       <span className="text-white font-bold">
                         {radiusMetrics.ballisticShower.length > 1
                           ? `${radiusMetrics.ballisticShower.filter((b) => ballisticTime >= b.traj.flightTime).length} proyektil telah membentur permukaan`
-                          : (isBallisticLanded ? '💥 Benturan di Titik Jatuh!' : `Kecepatan: ${currentBallisticPt.speed.toFixed(0)} m/s`)}
+                          : (isBallisticLanded ? '💥 Benturan di Titik Jatuh!' : `Kecepatan: ${(currentBallisticPt?.speed ?? 0).toFixed(0)} m/s`)}
                       </span>
                       <span>Semua Mendarat ({totalFlightTime.toFixed(1)}s)</span>
                     </div>
@@ -3751,7 +3840,154 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
             </div>
           )}
 
-          {/* TAB 2 CONTENT: SMOKE & ASH ANIMATION CONTROLS */}
+          {/* TAB 2 CONTENT: EJECTA PARTICLE SYSTEM CONTROLS */}
+          {activeAnimTab === 'particles' && (
+            <div className="space-y-2.5">
+              {!showParticleOverlay ? (
+                <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800 text-center space-y-2">
+                  <p className="text-zinc-300 text-xs font-medium">
+                    Overlay sistem partikel ejekta sedang nonaktif. Aktifkan untuk melihat visualisasi ribuan fragmen material vulkanik (bom pijar, skoria, lapili, dan abu tefra) terlontar dari kawah Anak Krakatau dan mendarat di permukaan laut secara dinamis dengan lintasan balistik 3D (RK4).
+                  </p>
+                  <button
+                    onClick={() => {
+                      setShowParticleOverlay(true);
+                      setIsParticlePlaying(true);
+                    }}
+                    className="px-4 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs transition-colors shadow-md inline-flex items-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Aktifkan Sistem Partikel Ejekta</span>
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Playback Controls, Eruption Trigger, Density & Continuous Mode */}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Burst Eruption Button */}
+                      <button
+                        onClick={() => {
+                          setParticleBurstTrigger((prev) => prev + 1);
+                          setIsParticlePlaying(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-black font-black text-xs flex items-center gap-1.5 shadow-md hover:shadow-orange-500/20 transition-all"
+                        title="Picukan letusan baru untuk melontarkan ratusan partikel ejekta dari kawah"
+                      >
+                        <Flame className="w-3.5 h-3.5 fill-black" />
+                        <span>Lontarkan Ejekta Baru</span>
+                      </button>
+
+                      {/* Play / Pause Toggle */}
+                      <button
+                        onClick={() => setIsParticlePlaying(!isParticlePlaying)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border shadow ${
+                          isParticlePlaying
+                            ? 'bg-amber-400 text-black border-amber-300 hover:bg-amber-300'
+                            : 'bg-zinc-850 text-white border-zinc-700 hover:bg-zinc-750'
+                        }`}
+                        title={isParticlePlaying ? 'Jeda animasi partikel di udara' : 'Lanjutkan pergerakan partikel'}
+                      >
+                        {isParticlePlaying ? (
+                          <>
+                            <Pause className="w-3.5 h-3.5 fill-current" />
+                            <span>Jeda Fisika</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Lanjutkan</span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* Continuous Fountain Toggle */}
+                      <button
+                        onClick={() => setContinuousEmission(!continuousEmission)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
+                          continuousEmission
+                            ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                            : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white'
+                        }`}
+                        title="Mode air mancur lava / erupsi strombolian berkesinambungan"
+                      >
+                        <Radio className={`w-3 h-3 ${continuousEmission ? 'animate-pulse text-red-400' : ''}`} />
+                        <span>Semburan Kontinu: {continuousEmission ? 'ON' : 'OFF'}</span>
+                      </button>
+
+                      {/* Density Selector */}
+                      <div className="flex items-center bg-zinc-900 rounded-lg p-0.5 border border-zinc-800 text-xs">
+                        <span className="text-[10px] text-zinc-500 font-mono px-1.5">Kerapatan:</span>
+                        {(['light', 'standard', 'dense'] as ParticleDensityMode[]).map((d) => (
+                          <button
+                            key={d}
+                            onClick={() => setParticleDensity(d)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                              particleDensity === d
+                                ? 'bg-amber-500 text-black font-bold'
+                                : 'text-zinc-400 hover:text-zinc-200'
+                            }`}
+                          >
+                            {d === 'light' ? '120' : d === 'standard' ? '320' : '650'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Live Telemetry Readout */}
+                    <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-300">
+                      <span>Di Udara: <strong className="text-amber-400">{particleStats.airborneCount}</strong></span>
+                      <span className="text-zinc-600">•</span>
+                      <span>Mendarat: <strong className="text-sky-400">{particleStats.landedCount}</strong></span>
+                      <span className="text-zinc-600">•</span>
+                      <span>Jangkauan: <strong className="text-white">{particleStats.maxDistKm} km</strong></span>
+                      <span className="text-zinc-600">•</span>
+                      <span>Alt Puncak: <strong className="text-amber-300">{(particleStats.maxAltitudeM / 1000).toFixed(2)} km</strong></span>
+                    </div>
+                  </div>
+
+                  {/* Secondary Details, Legend Bar & Physics Specs */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-xs text-zinc-300">
+                    <div className="flex flex-wrap items-center gap-3 text-[11px]">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-white shadow-[0_0_8px_#ffffff]" />
+                        <span>Bom Vulkanik ({ballistic.rockDiameter}m)</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-orange-500 shadow-[0_0_6px_#f97316]" />
+                        <span>Skoria & Blok Piroklastik</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-300" />
+                        <span>Lapili & Pijar Vulkanik</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full border border-sky-400" />
+                        <span>Benturan Air Laut (Riak Ombak)</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-zinc-400 hidden lg:inline">
+                        v₀: {ballistic.initialVelocity} m/s • θ: {ballistic.launchAngle}° • Az: {ballistic.launchAzimuth}°
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsEjectaModalOpen(true)}
+                        className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-white border border-amber-500/40 font-semibold text-[11px] transition-colors flex items-center gap-1 shadow-sm"
+                        title="Buka Telemetri Lengkap & Katalog Fragmen Batuan"
+                      >
+                        <span>💥</span>
+                        <span>Detail Balistik</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3 CONTENT: SMOKE & ASH ANIMATION CONTROLS */}
           {activeAnimTab === 'smoke' && (
             <div className="space-y-2.5">
               {!showSmokeAnim ? (

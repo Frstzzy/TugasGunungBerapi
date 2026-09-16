@@ -73,7 +73,7 @@ export interface SimulationStats {
   safeDistanceExceeded: boolean; // Zone III is 5km radius
 }
 
-export type EruptionPresetId = 'strombolian' | 'vulcanian' | 'surtseyan2018' | 'subplinian';
+export type EruptionPresetId = 'strombolian' | 'vulcanian' | 'surtseyan2018' | 'subplinian' | 'krakatau1883';
 
 export type AppTab = 'satellite' | 'map3d' | 'elevation' | 'theory';
 
@@ -122,6 +122,8 @@ export interface KrakatauWeather {
   temperatureC: number;
   apparentTempC: number;
   relativeHumidity: number; // %
+  humidity?: number; // alias for relativeHumidity
+  uvIndex?: number; // solar UV index (1-12)
   pressureHpa: number; // hPa
   weatherCondition: string;
   weatherCode: number;

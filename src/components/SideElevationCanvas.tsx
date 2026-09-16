@@ -35,7 +35,9 @@ import {
   Compass,
   Clock,
   Eye,
-  Mountain
+  Mountain,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { BallisticParams, PlumeParams, ProjectileState, KrakatauWeather } from '../types';
 import {
@@ -173,7 +175,7 @@ const TRANSECT_LANDMARKS: TransectLandmark[] = [
 ];
 
 type DrawerType = 'impact' | 'aerosol' | 'layers' | 'weather' | 'analysis' | 'bmkg' | null;
-type ViewFocusMode = 'crater' | 'caldera' | 'sunda' | 'atmosphere';
+type ViewFocusMode = 'super_zoom' | 'crater' | 'caldera' | 'sunda' | 'atmosphere';
 
 export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
   ballistic,
@@ -197,15 +199,19 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Viewport transformation: scale (meters to pixels), offset
-  const [scale, setScale] = useState<number>(0.12); // pixels per meter
+  // Defaulting to 0.35 gives a crisp, high-detail zoom into Anak Krakatau crater (157m peak)
+  const [scale, setScale] = useState<number>(0.35); // pixels per meter
   const [originX, setOriginX] = useState<number>(180);
   const [originY, setOriginY] = useState<number>(450);
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [probePos, setProbePos] = useState<{ x: number; y: number } | null>(null);
 
-  // View focus preset
+  // View focus preset - with zoom in version as prominent option
   const [viewFocus, setViewFocus] = useState<ViewFocusMode>('crater');
+
+  // Bottom dock toggle: when collapsed, provides an unobstructed full-canvas view
+  const [isBottomDockOpen, setIsBottomDockOpen] = useState<boolean>(true);
 
   // Flight Level & Drawer
   const [selectedFlightLevel, setSelectedFlightLevel] = useState<FlightLevelKey>('ALL');
@@ -240,35 +246,91 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
   const [isInternalAshModalOpen, setIsInternalAshModalOpen] = useState<boolean>(false);
   const [isInternalBmkgModalOpen, setIsInternalBmkgModalOpen] = useState<boolean>(false);
 
+  // Loop mode for ballistic animation
+  const [isBallisticLooping, setIsBallisticLooping] = useState<boolean>(false);
+
   // Physics simulation entities for live particle animation
   const projectilesRef = useRef<ProjectileState[]>([]);
   const smokePuffsRef = useRef<SmokePuff[]>([]);
   const splashesRef = useRef<SplashParticle[]>([]);
   const lastTimeRef = useRef<number>(performance.now());
   const nextPuffTimeRef = useRef<number>(0);
+  const lastImpactAudioTimeRef = useRef<number>(-1);
 
-  // Multi-projectile ballistic shower computation
-  const ballisticShower = useMemo(() => {
-    return computeBallisticShower(
-      ballistic,
-      ballistic.launchAzimuth ?? 90,
-      plume.windSpeed,
-      plume.windDirection,
-      ballistic.projectileCount ?? 6,
-      ballistic.dispersionMode ?? 'focused'
-    );
-  }, [ballistic, plume.windSpeed, plume.windDirection]);
+  // Refs to ensure 60fps canvas loop always accesses freshest state without tear
+  const simTimeMinutesRef = useRef<number>(simTimeMinutes);
+  simTimeMinutesRef.current = simTimeMinutes;
+  const ballisticTimeRef = useRef<number>(ballisticTime);
+  ballisticTimeRef.current = ballisticTime;
 
   // Primary trajectory calculation
   const primaryTrajectory = useMemo(() => {
     return computeTrajectory(ballistic, ballistic.enableAirDrag);
   }, [ballistic]);
 
+  // Dedicated 2D multi-bomb ejecta shower calculation along elevation cross-section
+  const ballisticShower2D = useMemo(() => {
+    const count = ballistic.projectileCount ?? 6;
+    const colors = ['#f97316', '#ef4444', '#f59e0b', '#fbbf24', '#e11d48', '#ffffff', '#fb923c', '#fdba74'];
+    const bombs = [];
+
+    // Bomb 0: Primary Trajectory
+    bombs.push({
+      id: 0,
+      label: 'Bom Vulkanik Primer',
+      color: '#f97316',
+      initialVelocity: ballistic.initialVelocity,
+      launchAngle: ballistic.launchAngle,
+      rockDiameter: ballistic.rockDiameter,
+      rockDensity: ballistic.rockDensity,
+      rockMassKg: (4 / 3) * Math.PI * Math.pow(ballistic.rockDiameter / 2, 3) * ballistic.rockDensity,
+      traj: primaryTrajectory,
+    });
+
+    // Secondary ejected bombs fanning out in 2D profile
+    for (let i = 1; i < count; i++) {
+      const angleDelta = (i % 2 === 1 ? 1 : -1) * (Math.ceil(i / 2) * 5.5 + Math.sin(i * 3.7) * 2.5);
+      const angle = Math.max(18, Math.min(82, ballistic.launchAngle + angleDelta));
+      const velFactor = 0.82 + ((i * 17) % 35) / 100;
+      const velocity = Math.max(40, ballistic.initialVelocity * velFactor);
+      const diamFactor = 0.4 + ((i * 23) % 80) / 100;
+      const diameter = Math.max(0.15, ballistic.rockDiameter * diamFactor);
+      const density = ballistic.rockDensity * (0.85 + ((i * 13) % 30) / 100);
+
+      const bombParams: BallisticParams = {
+        ...ballistic,
+        launchAngle: angle,
+        initialVelocity: velocity,
+        rockDiameter: diameter,
+        rockDensity: density,
+      };
+
+      const traj = computeTrajectory(bombParams, ballistic.enableAirDrag);
+      bombs.push({
+        id: i,
+        label: `Ejekta #${i + 1} (${diameter >= 0.5 ? 'Bom' : 'Blok'})`,
+        color: colors[i % colors.length],
+        initialVelocity: velocity,
+        launchAngle: angle,
+        rockDiameter: diameter,
+        rockDensity: density,
+        rockMassKg: (4 / 3) * Math.PI * Math.pow(diameter / 2, 3) * density,
+        traj,
+      });
+    }
+    return bombs;
+  }, [ballistic, primaryTrajectory]);
+
   const idealParabola = useMemo(() => {
     return computeIdealParabola(ballistic);
   }, [ballistic]);
 
-  const totalFlightTime = Math.max(1, primaryTrajectory.flightTime);
+  const totalFlightTime = useMemo(() => {
+    if (ballisticShower2D && ballisticShower2D.length > 0) {
+      return Math.max(1, ...ballisticShower2D.map((b) => b.traj?.flightTime ?? 0));
+    }
+    return Math.max(1, primaryTrajectory.flightTime);
+  }, [ballisticShower2D, primaryTrajectory.flightTime]);
 
   // Aerosol calculations
   const aerosolMetrics = useMemo(() => {
@@ -290,43 +352,63 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
       const rect = containerRef.current.getBoundingClientRect();
       canvasRef.current.width = rect.width;
       canvasRef.current.height = rect.height;
-      setOriginY(rect.height - 90);
+      // Position sea-level origin well above the bottom dock (dock takes ~160px when open)
+      setOriginY(rect.height - (isBottomDockOpen ? 180 : 70));
     };
 
     handleResize();
     const observer = new ResizeObserver(handleResize);
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, []);
+  }, [isBottomDockOpen]);
 
-  // Quick Camera Focus Presets
-  const applyViewFocus = useCallback((mode: ViewFocusMode) => {
+  // Quick Camera Focus Presets - including Super Zoom (High-detail 157m crater view)
+  const applyViewFocus = useCallback((mode: ViewFocusMode, dockOpen?: boolean) => {
     setViewFocus(mode);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const height = canvas.height;
+    const isDockActive = dockOpen !== undefined ? dockOpen : isBottomDockOpen;
+    const targetOriginY = height - (isDockActive ? 180 : 70);
 
-    if (mode === 'crater') {
-      // Zoom in on crater vent (0 to 1.5 km)
-      setScale(0.24);
-      setOriginX(180);
-      setOriginY(height - 90);
+    if (mode === 'super_zoom') {
+      // High Detail Zoom In on crater vent & summit rim (157m)
+      setScale(0.85);
+      setOriginX(Math.min(260, canvas.width * 0.35));
+      setOriginY(targetOriginY);
+    } else if (mode === 'crater') {
+      // Zoom in on crater vent & landing zone (0 to 2.5 km)
+      setScale(0.32);
+      setOriginX(Math.min(180, canvas.width * 0.25));
+      setOriginY(targetOriginY);
     } else if (mode === 'caldera') {
       // View Anak Krakatau + Rakata cliff (0 to 7 km)
-      setScale(0.11);
+      setScale(0.12);
       setOriginX(140);
-      setOriginY(height - 90);
+      setOriginY(targetOriginY);
     } else if (mode === 'sunda') {
-      // Full transect across Sunda Strait (0 to 25 km)
-      setScale(0.04);
+      // Full transect across Sunda Strait (0 to 35 km)
+      setScale(0.045);
       setOriginX(80);
-      setOriginY(height - 90);
+      setOriginY(targetOriginY);
     } else if (mode === 'atmosphere') {
       // Full vertical atmosphere column (0 to 16 km altitude)
-      setScale(0.045);
-      setOriginX(120);
-      setOriginY(height - 70);
+      setScale(0.035);
+      setOriginX(100);
+      setOriginY(targetOriginY);
     }
+  }, [isBottomDockOpen]);
+
+  // Toggle dock collapse with smooth coordinate compensation
+  const handleToggleBottomDock = useCallback(() => {
+    setIsBottomDockOpen((prev) => {
+      const next = !prev;
+      if (canvasRef.current) {
+        const height = canvasRef.current.height;
+        setOriginY(height - (next ? 180 : 70));
+      }
+      return next;
+    });
   }, []);
 
   // Reset view to default
@@ -390,9 +472,12 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
     }
   }, [ballistic]);
 
-  // Trigger when parent signals
+  const prevTriggerCountRef = useRef<number>(triggerCount);
+
+  // Trigger when parent signals (only on actual trigger change)
   useEffect(() => {
-    if (triggerCount > 0) {
+    if (triggerCount > 0 && triggerCount !== prevTriggerCountRef.current) {
+      prevTriggerCountRef.current = triggerCount;
       launchEruption();
     }
   }, [triggerCount, launchEruption]);
@@ -426,6 +511,11 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
       setBallisticTime((prev) => {
         const next = prev + dt * ballisticSpeed;
         if (next >= totalFlightTime) {
+          if (isBallisticLooping) {
+            lastImpactAudioTimeRef.current = -1;
+            return 0;
+          }
+          setIsBallisticPlaying(false);
           return totalFlightTime;
         }
         return next;
@@ -436,7 +526,7 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [isBallisticPlaying, ballisticSpeed, totalFlightTime]);
+  }, [isBallisticPlaying, ballisticSpeed, totalFlightTime, isBallisticLooping]);
 
   // Smoke plume playback ticker (simulated minutes)
   useEffect(() => {
@@ -449,8 +539,11 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
       lastTs = now;
 
       setSimTimeMinutes((prev) => {
-        const next = prev + dt * smokeSpeed * 2.5; // ~2.5 simulated minutes per sec
-        if (next >= 240) return 240;
+        const next = prev + dt * smokeSpeed * 3.0; // ~3 simulated minutes per sec
+        if (next >= 240) {
+          setIsSmokePlaying(false);
+          return 240;
+        }
         return next;
       });
 
@@ -483,20 +576,19 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
       const fromScreenX = (sX: number) => (sX - originX) / scale;
       const fromScreenY = (sY: number) => (originY - sY) / scale;
 
-      // Physics update: Continuous rising plume from crater
+      // 1. Physics update: Continuous rising plume from crater
       if (showSmokePlume && time > nextPuffTimeRef.current) {
-        nextPuffTimeRef.current = time + 130 / (plume.emissionRate || 1);
-        const driftAngle = (plume.windDirection * Math.PI) / 180;
-        const windDriftX = Math.sin(driftAngle) * plume.windSpeed * 0.6;
+        nextPuffTimeRef.current = time + 100 / (plume.emissionRate || 1);
+        const windDriftX = Math.max(2, plume.windSpeed) * 0.4;
 
         smokePuffsRef.current.push({
-          x: (Math.random() - 0.5) * 40,
-          y: ballistic.ventElevation + 10,
-          vx: windDriftX * 0.2 + (Math.random() - 0.5) * 10,
-          vy: 40 + (plume.columnHeight / 100) * (0.8 + Math.random() * 0.4),
-          radius: 20 + Math.random() * 15,
-          maxRadius: 100 + plume.columnHeight / 35,
-          opacity: 0.65,
+          x: (Math.random() - 0.5) * 35,
+          y: ballistic.ventElevation + 8,
+          vx: windDriftX + (Math.random() - 0.5) * 8,
+          vy: 35 + (plume.columnHeight / 100) * (0.75 + Math.random() * 0.4),
+          radius: 18 + Math.random() * 14,
+          maxRadius: 90 + plume.columnHeight / 40,
+          opacity: 0.7,
           color: Math.random() > 0.4 ? '#475569' : '#1e293b',
         });
       }
@@ -505,86 +597,48 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
       for (let i = smokePuffsRef.current.length - 1; i >= 0; i--) {
         const puff = smokePuffsRef.current[i];
         puff.vy *= 0.985;
-        if (puff.y > ballistic.ventElevation + plume.columnHeight * 0.75) {
+        if (puff.y > ballistic.ventElevation + plume.columnHeight * 0.7) {
           // Umbrella expansion & horizontal wind drift
-          puff.vx += (plume.windSpeed * 0.85 - puff.vx) * 0.05;
-          puff.vy *= 0.94;
+          puff.vx += (plume.windSpeed * 0.9 - puff.vx) * 0.06;
+          puff.vy *= 0.93;
         } else {
-          puff.vx += (plume.windSpeed * 0.4 - puff.vx) * 0.02;
+          puff.vx += (plume.windSpeed * 0.5 - puff.vx) * 0.03;
         }
 
         puff.x += puff.vx * dt;
         puff.y += puff.vy * dt;
-        puff.radius = Math.min(puff.maxRadius, puff.radius + 15 * dt);
-        puff.opacity -= 0.04 * dt;
+        puff.radius = Math.min(puff.maxRadius, puff.radius + 18 * dt);
+        puff.opacity -= 0.035 * dt;
 
-        if (puff.opacity <= 0.01 || puff.x > 50000 || puff.y > 20000) {
+        if (puff.opacity <= 0.01 || puff.x > 85000 || puff.y > 25000) {
           smokePuffsRef.current.splice(i, 1);
         }
       }
 
-      // Update projectiles
-      const simSubSteps = 4;
-      const subDt = dt / simSubSteps;
+      // 2. Ballistic Impact Audio & Landing Splash Particle Spawning
+      const curBallisticTime = ballisticTimeRef.current;
 
-      for (const proj of projectilesRef.current) {
-        if (proj.landed) continue;
+      // Audio splash triggering when primary projectile impacts
+      if (curBallisticTime < 0.2) {
+        lastImpactAudioTimeRef.current = -1;
+      } else if (curBallisticTime >= primaryTrajectory.flightTime && lastImpactAudioTimeRef.current < 0) {
+        volcanicAudio.playImpactSplash();
+        lastImpactAudioTimeRef.current = curBallisticTime;
 
-        for (let step = 0; step < simSubSteps; step++) {
-          const area = Math.PI * proj.radius * proj.radius;
-          const next = stepRK4(
-            proj.x,
-            proj.y,
-            proj.vx,
-            proj.vy,
-            subDt,
-            proj.mass,
-            area,
-            ballistic.dragCoefficient,
-            ballistic.gravity,
-            ballistic.enableAirDrag
-          );
-
-          proj.x = next.x;
-          proj.y = next.y;
-          proj.vx = next.vx;
-          proj.vy = next.vy;
-          proj.time += subDt;
-
-          // Check landing at sea level y = 0
-          if (proj.y <= 0) {
-            proj.y = 0;
-            proj.landed = true;
-            proj.landingX = proj.x;
-            proj.landingTime = proj.time;
-            proj.impactVelocity = Math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy);
-            proj.impactEnergy = 0.5 * proj.mass * proj.impactVelocity * proj.impactVelocity;
-
-            volcanicAudio.playImpactSplash();
-
-            // Spawn water splash particles
-            for (let sp = 0; sp < 25; sp++) {
-              const spAngle = Math.PI * 0.2 + Math.random() * Math.PI * 0.6;
-              const spSpeed = 15 + Math.random() * 45;
-              splashesRef.current.push({
-                x: proj.x,
-                y: 0,
-                vx: Math.cos(spAngle) * spSpeed * (Math.random() > 0.5 ? 1 : -1),
-                vy: Math.sin(spAngle) * spSpeed,
-                life: 0,
-                maxLife: 1.0 + Math.random() * 0.5,
-                size: 2 + Math.random() * 4,
-              });
-            }
-            break;
-          }
-        }
-
-        // Trail sampling
-        const lastPoint = proj.trail[proj.trail.length - 1];
-        if (!lastPoint || Math.hypot(proj.x - lastPoint.x, proj.y - lastPoint.y) > 15) {
-          proj.trail.push({ x: proj.x, y: proj.y });
-          if (proj.trail.length > 250) proj.trail.shift();
+        // Spawn rich water geyser splash particles at primary impact point
+        const impactX = primaryTrajectory.maxRange;
+        for (let sp = 0; sp < 32; sp++) {
+          const spAngle = Math.PI * 0.15 + Math.random() * Math.PI * 0.7;
+          const spSpeed = 20 + Math.random() * 55;
+          splashesRef.current.push({
+            x: impactX + (Math.random() - 0.5) * 15,
+            y: 0,
+            vx: Math.cos(spAngle) * spSpeed * (Math.random() > 0.45 ? 1 : -1),
+            vy: Math.sin(spAngle) * spSpeed,
+            life: 0,
+            maxLife: 1.2 + Math.random() * 0.6,
+            size: 2.5 + Math.random() * 4.5,
+          });
         }
       }
 
@@ -593,9 +647,9 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
         const s = splashesRef.current[sp];
         s.x += s.vx * dt;
         s.y += s.vy * dt;
-        s.vy -= ballistic.gravity * 3.5 * dt;
+        s.vy -= ballistic.gravity * 4.2 * dt;
         s.life += dt;
-        if (s.life >= s.maxLife || (s.y < 0 && s.life > 0.1)) {
+        if (s.life >= s.maxLife || (s.y < 0 && s.life > 0.08)) {
           splashesRef.current.splice(sp, 1);
         }
       }
@@ -651,11 +705,11 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
 
       // 3. Grid Lines & Altitude Metric Axis
       ctx.lineWidth = 1;
-      const meterStepY = scale > 0.15 ? 100 : scale > 0.06 ? 500 : 1000;
+      const meterStepY = scale >= 0.5 ? 25 : scale >= 0.25 ? 50 : scale > 0.12 ? 100 : scale > 0.06 ? 500 : 1000;
       const startMeterY = Math.max(0, Math.floor(fromScreenY(height) / meterStepY) * meterStepY);
       const endMeterY = Math.ceil(fromScreenY(0) / meterStepY) * meterStepY;
 
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+      ctx.strokeStyle = scale >= 0.25 ? 'rgba(255, 255, 255, 0.09)' : 'rgba(255, 255, 255, 0.06)';
       ctx.fillStyle = '#64748b';
       ctx.font = '9px JetBrains Mono, monospace';
 
@@ -672,7 +726,7 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
       }
 
       // Distance Metric Axis along Horizontal
-      const meterStepX = scale > 0.15 ? 200 : scale > 0.06 ? 1000 : 2500;
+      const meterStepX = scale >= 0.5 ? 50 : scale >= 0.25 ? 100 : scale > 0.12 ? 250 : scale > 0.06 ? 1000 : 2500;
       const startMeterX = Math.floor(fromScreenX(0) / meterStepX) * meterStepX;
       const endMeterX = Math.ceil(fromScreenX(width) / meterStepX) * meterStepX;
 
@@ -768,6 +822,69 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
           ctx.lineWidth = lm.id === 'krakatau' ? 1.5 : 1;
           ctx.stroke();
 
+          // High-detail Crater & Magma Conduit when in Zoom-In view
+          if (lm.id === 'krakatau' && scale >= 0.2) {
+            const craterHalfW = 120 * scale;
+            const shoulderY = originY - peakH;
+            const ventFloorY = originY - (lm.peakElevation - 40) * scale;
+
+            // Sub-surface magma conduit feeding pipe below vent floor
+            const conduitW = Math.max(12, 45 * scale);
+            const conduitGrad = ctx.createLinearGradient(cx - conduitW / 2, 0, cx + conduitW / 2, 0);
+            conduitGrad.addColorStop(0, '#991b1b');
+            conduitGrad.addColorStop(0.5, '#f97316');
+            conduitGrad.addColorStop(1, '#991b1b');
+            ctx.fillStyle = conduitGrad;
+            ctx.fillRect(cx - conduitW / 2, ventFloorY, conduitW, Math.max(20, originY - ventFloorY + 25));
+
+            // Glowing magma pulses inside conduit
+            const pulse = Math.sin(time * 0.005) * 0.25 + 0.75;
+            ctx.fillStyle = `rgba(254, 240, 138, ${pulse * 0.8})`;
+            ctx.fillRect(cx - conduitW * 0.2, ventFloorY, conduitW * 0.4, Math.max(20, originY - ventFloorY + 25));
+
+            // Glowing active lava lake in crater floor
+            const lavaPoolGrad = ctx.createRadialGradient(cx, ventFloorY, 2, cx, ventFloorY, Math.max(8, craterHalfW * 0.8));
+            lavaPoolGrad.addColorStop(0, '#ffffff');
+            lavaPoolGrad.addColorStop(0.3, '#fbbf24');
+            lavaPoolGrad.addColorStop(0.7, '#ea580c');
+            lavaPoolGrad.addColorStop(1, 'rgba(185, 28, 28, 0)');
+            ctx.fillStyle = lavaPoolGrad;
+            ctx.beginPath();
+            ctx.ellipse(cx, ventFloorY, Math.max(8, craterHalfW * 0.75), Math.max(3, 5 * scale), 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Yellow sulfur deposit tints on crater rim shoulders
+            ctx.strokeStyle = 'rgba(234, 179, 8, 0.85)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx - craterHalfW * 1.8, shoulderY);
+            ctx.lineTo(cx - craterHalfW, shoulderY + 6);
+            ctx.moveTo(cx + craterHalfW, shoulderY + 6);
+            ctx.lineTo(cx + craterHalfW * 1.8, shoulderY);
+            ctx.stroke();
+
+            // Detailed close-up annotations when in high zoom
+            if (scale >= 0.35) {
+              // 157m Peak annotation
+              ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
+              ctx.setLineDash([2, 2]);
+              ctx.beginPath();
+              ctx.moveTo(cx - craterHalfW * 2, shoulderY);
+              ctx.lineTo(cx - craterHalfW * 2 - 20, shoulderY);
+              ctx.stroke();
+              ctx.setLineDash([]);
+
+              ctx.fillStyle = '#fbbf24';
+              ctx.font = 'bold 9px JetBrains Mono, monospace';
+              ctx.fillText('▲ Bibir 157 mdpl', cx - craterHalfW * 2 - 110, shoulderY + 3);
+
+              // Vent floor annotation
+              ctx.fillStyle = '#f87171';
+              ctx.font = 'bold 9px JetBrains Mono, monospace';
+              ctx.fillText('♨ Vent Magma Aktif', cx + craterHalfW + 10, ventFloorY + 3);
+            }
+          }
+
           // Landmark Label
           if (cx > -100 && cx < width + 100) {
             ctx.fillStyle = '#f8fafc';
@@ -801,57 +918,211 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
       ctx.font = '9px JetBrains Mono, monospace';
       ctx.fillText('Muka Laut (y = 0 mdpl)', 12, originY + 14);
 
-      // 7. Render Smoke Plume & Umbrella Clouds
+      // 7. Render Smoke Plume & Ash Dispersal Envelope (Time-resolved T+0 to T+240m)
       if (showSmokePlume) {
+        const tMinutes = simTimeMinutesRef.current;
+        const ventSX = toScreenX(0);
+        const ventFloorSY = toScreenY(ballistic.ventElevation);
+
+        // Column growth in the first 10 minutes of eruption
+        const colGrowthFactor = Math.min(1, Math.max(0.12, tMinutes / 10));
+        const activeColumnHeight = plume.columnHeight * colGrowthFactor;
+        const colTopM = ballistic.ventElevation + activeColumnHeight;
+        const colTopSY = toScreenY(colTopM);
+
+        // Umbrella horizontal expansion over time (Sparks / Suzuki model)
+        const maxUmbrellaR = Math.min(16000, 2500 + (plume.columnHeight / 1000) * 850);
+        const umbrellaGrowth = Math.min(1, Math.sqrt(Math.max(0.08, tMinutes) / 20));
+        const curUmbrellaR = maxUmbrellaR * umbrellaGrowth;
+
+        // Downwind advection distance of ash front (windSpeed * seconds)
+        const windSpeedEff = Math.max(2, plume.windSpeed);
+        const ashFrontM = Math.min(85000, windSpeedEff * (tMinutes * 60));
+        const ashFrontSX = toScreenX(ashFrontM);
+
+        // A. Continuous Rising Vent Puffs (60fps turbulence)
         for (const puff of smokePuffsRef.current) {
           const sx = toScreenX(puff.x);
           const sy = toScreenY(puff.y);
           const sRadius = puff.radius * scale;
 
-          if (sx + sRadius > 0 && sx - sRadius < width && sy + sRadius > 0 && sy - sRadius < height) {
+          if (sx + sRadius > -50 && sx - sRadius < width + 50 && sy + sRadius > -50 && sy - sRadius < height + 50) {
             ctx.beginPath();
             ctx.arc(sx, sy, Math.max(3, sRadius), 0, Math.PI * 2);
             ctx.fillStyle = puff.color;
-            ctx.globalAlpha = puff.opacity * 0.7;
+            ctx.globalAlpha = puff.opacity * 0.75;
             ctx.fill();
           }
         }
         ctx.globalAlpha = 1.0;
 
-        // Plume Column Height Envelope & Umbrella Spread Indicator
-        const ventSX = toScreenX(0);
-        const colTopSY = toScreenY(ballistic.ventElevation + plume.columnHeight);
-        const umbrellaRadiusM = Math.min(12000, 2000 + (plume.columnHeight / 1000) * 800);
-        const umbrellaLeftSX = toScreenX(-umbrellaRadiusM * 0.4);
-        const umbrellaRightSX = toScreenX(umbrellaRadiusM * 1.5);
+        // B. Main Vertical Convective Eruption Column
+        const colBaseW = Math.max(16, 140 * scale);
+        const colMidW = Math.max(28, (curUmbrellaR * 0.35) * scale);
+        const colMidSY = toScreenY(ballistic.ventElevation + activeColumnHeight * 0.6);
 
-        // Umbrella horizontal spread
-        ctx.fillStyle = 'rgba(100, 116, 139, 0.15)';
+        // Glowing incandescent thrust core at crater mouth
+        const gasThrustSY = toScreenY(ballistic.ventElevation + Math.min(600, activeColumnHeight * 0.2));
+        const thrustGrad = ctx.createLinearGradient(ventSX, ventFloorSY, ventSX, gasThrustSY);
+        thrustGrad.addColorStop(0, 'rgba(249, 115, 22, 0.85)');
+        thrustGrad.addColorStop(0.4, 'rgba(234, 88, 12, 0.7)');
+        thrustGrad.addColorStop(1, 'rgba(51, 65, 85, 0.6)');
+        ctx.fillStyle = thrustGrad;
         ctx.beginPath();
-        ctx.ellipse(
-          (umbrellaLeftSX + umbrellaRightSX) / 2,
-          colTopSY,
-          (umbrellaRightSX - umbrellaLeftSX) / 2,
-          40 * scale * 25,
-          0,
-          0,
-          Math.PI * 2
-        );
+        ctx.moveTo(ventSX - colBaseW * 0.5, ventFloorSY);
+        ctx.lineTo(ventSX - colBaseW * 0.7, gasThrustSY);
+        ctx.lineTo(ventSX + colBaseW * 0.7, gasThrustSY);
+        ctx.lineTo(ventSX + colBaseW * 0.5, ventFloorSY);
+        ctx.closePath();
         ctx.fill();
 
-        // Column Top Line
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([5, 5]);
+        // Convective column body
+        const colGrad = ctx.createLinearGradient(0, ventFloorSY, 0, colTopSY);
+        colGrad.addColorStop(0, 'rgba(30, 41, 59, 0.85)');
+        colGrad.addColorStop(0.5, 'rgba(51, 65, 85, 0.75)');
+        colGrad.addColorStop(1, 'rgba(71, 85, 105, 0.65)');
+
+        ctx.fillStyle = colGrad;
         ctx.beginPath();
-        ctx.moveTo(umbrellaLeftSX, colTopSY);
-        ctx.lineTo(umbrellaRightSX, colTopSY);
+        ctx.moveTo(ventSX - colBaseW * 0.7, gasThrustSY);
+        ctx.bezierCurveTo(
+          ventSX - colMidW * 0.8 - Math.sin(time * 0.002) * 8,
+          colMidSY + 40,
+          ventSX - colMidW - Math.cos(time * 0.003) * 10,
+          colMidSY,
+          ventSX - (curUmbrellaR * 0.35) * scale,
+          colTopSY + 20
+        );
+        ctx.lineTo(ventSX + (curUmbrellaR * 0.45) * scale, colTopSY + 20);
+        ctx.bezierCurveTo(
+          ventSX + colMidW + Math.cos(time * 0.0025) * 10,
+          colMidSY,
+          ventSX + colMidW * 0.8 + Math.sin(time * 0.002) * 8,
+          colMidSY + 40,
+          ventSX + colBaseW * 0.7,
+          gasThrustSY
+        );
+        ctx.closePath();
+        ctx.fill();
+
+        // C. Downwind Ash Dispersal Cloud Envelope (Advection toward East/Islands)
+        if (ashFrontM > 200) {
+          const upwindSX = toScreenX(-curUmbrellaR * 0.3);
+          const downwindCloudBaseM = Math.max(500, colTopM * 0.35);
+          const downwindCloudBaseSY = toScreenY(downwindCloudBaseM);
+          const downwindCloudTopSY = toScreenY(colTopM * 1.05);
+
+          const ashBodyGrad = ctx.createLinearGradient(ventSX, 0, ashFrontSX, 0);
+          ashBodyGrad.addColorStop(0, 'rgba(51, 65, 85, 0.8)');
+          ashBodyGrad.addColorStop(0.3, 'rgba(71, 85, 105, 0.65)');
+          ashBodyGrad.addColorStop(0.7, 'rgba(100, 116, 139, 0.45)');
+          ashBodyGrad.addColorStop(1, 'rgba(148, 163, 184, 0.08)');
+
+          ctx.fillStyle = ashBodyGrad;
+          ctx.beginPath();
+          ctx.moveTo(upwindSX, colTopSY + 15);
+          ctx.quadraticCurveTo(ventSX - curUmbrellaR * 0.4 * scale, colTopSY - 25, ventSX, colTopSY - 20);
+          const midX1 = ventSX + (ashFrontSX - ventSX) * 0.35;
+          const midX2 = ventSX + (ashFrontSX - ventSX) * 0.7;
+          ctx.bezierCurveTo(
+            midX1,
+            colTopSY - 15 + Math.sin(time * 0.002) * 8,
+            midX2,
+            downwindCloudTopSY + Math.cos(time * 0.0025) * 12,
+            ashFrontSX,
+            (downwindCloudTopSY + downwindCloudBaseSY) / 2
+          );
+          ctx.bezierCurveTo(
+            midX2,
+            downwindCloudBaseSY + Math.sin(time * 0.003) * 15,
+            midX1,
+            downwindCloudBaseSY - 10,
+            ventSX + curUmbrellaR * 0.3 * scale,
+            downwindCloudBaseSY + 20
+          );
+          ctx.lineTo(upwindSX, colTopSY + 15);
+          ctx.closePath();
+          ctx.fill();
+
+          // D. Ash Fallout Rain Curtain (virga descending into the Sunda Strait)
+          if (tMinutes >= 5) {
+            const falloutMaxX = Math.min(ashFrontSX, toScreenX(Math.min(ashFrontM * 0.85, 35000)));
+            const falloutStartSX = toScreenX(250);
+
+            if (falloutMaxX > falloutStartSX) {
+              const rainGrad = ctx.createLinearGradient(0, downwindCloudBaseSY, 0, originY);
+              rainGrad.addColorStop(0, 'rgba(71, 85, 105, 0.35)');
+              rainGrad.addColorStop(0.6, 'rgba(100, 116, 139, 0.2)');
+              rainGrad.addColorStop(1, 'rgba(148, 163, 184, 0.05)');
+
+              ctx.fillStyle = rainGrad;
+              ctx.beginPath();
+              ctx.moveTo(falloutStartSX, downwindCloudBaseSY);
+              ctx.lineTo(falloutMaxX, downwindCloudBaseSY + 30);
+              ctx.lineTo(falloutMaxX + 25, originY);
+              ctx.lineTo(falloutStartSX - 15, originY);
+              ctx.closePath();
+              ctx.fill();
+
+              // Fallout streak texture
+              ctx.strokeStyle = 'rgba(203, 213, 225, 0.18)';
+              ctx.lineWidth = 1;
+              ctx.setLineDash([3, 7]);
+              for (let rx = falloutStartSX + 25; rx < falloutMaxX; rx += 45) {
+                ctx.beginPath();
+                ctx.moveTo(rx, downwindCloudBaseSY + 10);
+                ctx.lineTo(rx + 20, originY);
+                ctx.stroke();
+              }
+              ctx.setLineDash([]);
+            }
+          }
+
+          // E. Leading Ash Front Vertical Indicator & Badge
+          if (ashFrontSX > 0 && ashFrontSX < width + 100) {
+            ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(ashFrontSX, downwindCloudTopSY - 25);
+            ctx.lineTo(ashFrontSX, originY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Front arrival flag badge
+            const badgeW = 125;
+            const badgeH = 22;
+            const badgeX = Math.max(10, Math.min(width - badgeW - 10, ashFrontSX - badgeW / 2));
+            const badgeY = Math.max(35, downwindCloudTopSY - 32);
+
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+            ctx.strokeStyle = '#fbbf24';
+            ctx.lineWidth = 1;
+            ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+            ctx.strokeRect(badgeX, badgeY, badgeW, badgeH);
+
+            ctx.fillStyle = '#fbbf24';
+            ctx.font = 'bold 9px JetBrains Mono, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`FRONT: ${(ashFrontM / 1000).toFixed(1)} km (T+${Math.floor(tMinutes)}m)`, badgeX + badgeW / 2, badgeY + 14);
+            ctx.textAlign = 'left';
+          }
+        }
+
+        // F. Column Top Line & Flight Level Tag
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(ventSX - curUmbrellaR * 0.4 * scale, colTopSY);
+        ctx.lineTo(ventSX + Math.max(curUmbrellaR * 0.8 * scale, 120), colTopSY);
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 10px JetBrains Mono, monospace';
-        ctx.fillText(`▲ Puncak Kolom: ${(plume.columnHeight / 1000).toFixed(1)} km (${plume.columnHeight}m)`, ventSX + 15, colTopSY - 6);
+        const flEquiv = Math.round(colTopM / 30.48);
+        ctx.fillText(`▲ Puncak Kolom: ${(activeColumnHeight / 1000).toFixed(1)} km (FL${flEquiv})`, ventSX + 15, colTopSY - 6);
       }
 
       // 8. Vacuum Trajectory (Parabola Ideal)
@@ -870,100 +1141,230 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
         ctx.setLineDash([]);
       }
 
-      // 9. Multi-Projectile Ballistic Arcs (RK4)
-      ballisticShower?.forEach((bomb, bIdx) => {
+      // 9. Multi-Projectile Ballistic Arcs & Real-time Animated Bombs (RK4)
+      const showerList = ballisticShower2D;
+
+      showerList.forEach((bomb, bIdx) => {
         const pts = bomb?.traj?.points;
         if (!pts || pts.length < 2) return;
 
-        // Draw trajectory arc line
-        ctx.strokeStyle = bomb.color;
-        ctx.lineWidth = bIdx === 0 ? 2 : 1;
-        ctx.beginPath();
+        const isPrimary = bIdx === 0;
+        const flightTime = bomb?.traj?.flightTime ?? totalFlightTime;
+        const isLanded = ballisticTime >= flightTime;
 
-        pts.forEach((p, i) => {
-          const sx = toScreenX(p.x);
-          const sy = toScreenY(p.y);
+        // Find active point along trajectory at current ballisticTime
+        let activeIdx = pts.findIndex((p) => p.t >= ballisticTime);
+        if (activeIdx === -1) activeIdx = pts.length - 1;
+        const curPt = pts[activeIdx] || pts[0];
+
+        // Draw traveled path up to current active index
+        ctx.strokeStyle = bomb.color;
+        ctx.lineWidth = isPrimary ? 2.4 : 1.4;
+        ctx.beginPath();
+        for (let i = 0; i <= activeIdx; i++) {
+          const sx = toScreenX(pts[i].x);
+          const sy = toScreenY(pts[i].y);
           if (i === 0) ctx.moveTo(sx, sy);
           else ctx.lineTo(sx, sy);
-        });
+        }
         ctx.stroke();
 
-        // Landing Impact Point
-        const landingPt = pts[pts.length - 1];
-        if (landingPt && landingPt.y <= 0) {
-          const impactSX = toScreenX(landingPt.x);
-          const impactSY = toScreenY(0);
+        // If in-flight: draw dashed preview of remaining path
+        if (!isLanded && activeIdx < pts.length - 1) {
+          ctx.strokeStyle = bomb.color;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 4]);
+          ctx.globalAlpha = 0.35;
+          ctx.beginPath();
+          for (let i = activeIdx; i < pts.length; i++) {
+            const sx = toScreenX(pts[i].x);
+            const sy = toScreenY(pts[i].y);
+            if (i === activeIdx) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1.0;
+        }
 
+        if (isLanded) {
+          // Landing Impact Point, Sea Water Spray Fountain & Ripples
+          const landingPt = pts[pts.length - 1];
+          if (landingPt) {
+            const impactSX = toScreenX(landingPt.x);
+            const impactSY = toScreenY(0);
+            const timeSinceLanding = Math.max(0, ballisticTime - flightTime);
+
+            // A. Concentric expanding ocean waves
+            const rippleR1 = Math.min(50, (bomb.rockDiameter * 14) + timeSinceLanding * 16);
+            const rippleR2 = Math.max(0, rippleR1 - 12);
+            const rippleAlpha = Math.max(0, 0.85 - timeSinceLanding * 0.28);
+
+            if (rippleAlpha > 0.03) {
+              ctx.strokeStyle = `rgba(186, 230, 253, ${rippleAlpha})`;
+              ctx.lineWidth = 1.6;
+              ctx.beginPath();
+              ctx.arc(impactSX, impactSY, rippleR1, 0, Math.PI * 2);
+              ctx.stroke();
+
+              if (rippleR2 > 2) {
+                ctx.strokeStyle = `rgba(125, 211, 252, ${rippleAlpha * 0.65})`;
+                ctx.lineWidth = 1.2;
+                ctx.beginPath();
+                ctx.arc(impactSX, impactSY, rippleR2, 0, Math.PI * 2);
+                ctx.stroke();
+              }
+            }
+
+            // B. Sea Water Spray Fountain (Semburan Air Laut Tegak)
+            if (timeSinceLanding < 2.5) {
+              const splashProgress = timeSinceLanding / 2.5;
+              const splashHeight = Math.max(0, 1 - splashProgress) * (45 + bomb.rockDiameter * 20);
+              const splashTopSY = impactSY - splashHeight;
+
+              // Vertical water column spray
+              const sprayGrad = ctx.createLinearGradient(impactSX, impactSY, impactSX, splashTopSY);
+              sprayGrad.addColorStop(0, `rgba(255, 255, 255, ${Math.max(0, 0.9 - splashProgress)})`);
+              sprayGrad.addColorStop(0.5, `rgba(186, 230, 253, ${Math.max(0, 0.7 - splashProgress)})`);
+              sprayGrad.addColorStop(1, `rgba(186, 230, 253, 0)`);
+
+              ctx.fillStyle = sprayGrad;
+              ctx.beginPath();
+              ctx.moveTo(impactSX - 6, impactSY);
+              ctx.lineTo(impactSX - 2, splashTopSY);
+              ctx.lineTo(impactSX + 2, splashTopSY);
+              ctx.lineTo(impactSX + 6, impactSY);
+              ctx.closePath();
+              ctx.fill();
+
+              // Expanding steam / vapor puff from quenched hot volcanic rock
+              const steamRadius = (timeSinceLanding * 12 + 6);
+              const steamAlpha = Math.max(0, 0.5 - splashProgress * 0.5);
+              if (steamAlpha > 0.02) {
+                ctx.fillStyle = `rgba(241, 245, 249, ${steamAlpha})`;
+                ctx.beginPath();
+                ctx.arc(impactSX, impactSY - timeSinceLanding * 15 - 8, steamRadius, 0, Math.PI * 2);
+                ctx.fill();
+              }
+            }
+
+            // Sunken impact point indicator
+            ctx.fillStyle = bomb.color;
+            ctx.beginPath();
+            ctx.arc(impactSX, impactSY, isPrimary ? 5 : 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // White center dot
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(impactSX, impactSY, isPrimary ? 2 : 1.2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else {
+          // IN-FLIGHT ANIMATED VOLCANIC PROJECTILE
+          const curSX = toScreenX(curPt.x);
+          const curSY = toScreenY(curPt.y);
+
+          // Projectile Glow Corona
+          ctx.shadowColor = bomb.color;
+          ctx.shadowBlur = isPrimary ? 18 : 10;
+
+          // Outer incandescent molten aura
           ctx.fillStyle = bomb.color;
           ctx.beginPath();
-          ctx.arc(impactSX, impactSY, bIdx === 0 ? 4 : 2.5, 0, Math.PI * 2);
+          ctx.arc(curSX, curSY, isPrimary ? 5.5 : 3.5, 0, Math.PI * 2);
           ctx.fill();
+
+          // Hot white-hot core
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(curSX, curSY, isPrimary ? 3 : 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          // Trail sparks / burning lapilli ejecta
+          if (isPrimary || Math.random() < 0.4) {
+            ctx.fillStyle = '#fef08a';
+            ctx.beginPath();
+            ctx.arc(curSX - 4 + Math.random() * 2, curSY + 3 + Math.random() * 2, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Kinematic Force Vectors at Primary Projectile (v, Fd, g)
+          if (isPrimary && showVectors && curPt.y > 0) {
+            const vel = curPt.speed;
+            const vxVal = curPt.vx ?? (pts[Math.min(pts.length - 1, activeIdx + 1)].x - curPt.x);
+            const vyVal = curPt.vy ?? (pts[Math.min(pts.length - 1, activeIdx + 1)].y - curPt.y);
+            const angle = Math.atan2(vyVal, vxVal);
+
+            // Velocity vector v (Cyan/White)
+            const vLen = Math.min(65, Math.max(20, vel * 0.22));
+            const vEndX = curSX + Math.cos(angle) * vLen;
+            const vEndY = curSY - Math.sin(angle) * vLen;
+
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 2.2;
+            ctx.beginPath();
+            ctx.moveTo(curSX, curSY);
+            ctx.lineTo(vEndX, vEndY);
+            ctx.stroke();
+
+            // Arrowhead for v
+            ctx.fillStyle = '#38bdf8';
+            ctx.beginPath();
+            ctx.arc(vEndX, vEndY, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Velocity tag
+            ctx.font = 'bold 9px JetBrains Mono, monospace';
+            ctx.fillText(`v: ${vel.toFixed(0)} m/s`, vEndX + 5, vEndY - 2);
+
+            // Drag force Fd (Red / opposing velocity)
+            const area = Math.PI * Math.pow(ballistic.rockDiameter / 2, 2);
+            const rho = 1.225 * Math.exp(-curPt.y / 8500);
+            const fdMag = 0.5 * rho * ballistic.dragCoefficient * area * vel * vel;
+            const fdLen = Math.min(50, Math.max(16, (fdMag / (ballistic.rockDensity * 0.05)) * 0.05 + 15));
+            const fdEndX = curSX - Math.cos(angle) * fdLen;
+            const fdEndY = curSY + Math.sin(angle) * fdLen;
+
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(curSX, curSY);
+            ctx.lineTo(fdEndX, fdEndY);
+            ctx.stroke();
+
+            // Arrowhead for Fd
+            ctx.fillStyle = '#ef4444';
+            ctx.beginPath();
+            ctx.arc(fdEndX, fdEndY, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillText(`Fd: ${(fdMag / 1000).toFixed(1)} kN`, fdEndX - 55, fdEndY + 12);
+
+            // Gravity g (downwards - Yellow)
+            const gLen = 32;
+            ctx.strokeStyle = '#eab308';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(curSX, curSY);
+            ctx.lineTo(curSX, curSY + gLen);
+            ctx.stroke();
+
+            // Arrowhead for g
+            ctx.fillStyle = '#eab308';
+            ctx.beginPath();
+            ctx.arc(curSX, curSY + gLen, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillText(`g: 9.8 m/s²`, curSX + 6, curSY + gLen);
+          }
         }
       });
 
-      // 10. Real-time Animated Projectile along Trajectory
-      if (primaryTrajectory?.points && primaryTrajectory.points.length > 0) {
-        let activeIdx = primaryTrajectory.points.findIndex((p) => p.t >= ballisticTime);
-        if (activeIdx === -1) activeIdx = primaryTrajectory.points.length - 1;
-        const curPt = primaryTrajectory.points[activeIdx];
-
-        const curSX = toScreenX(curPt.x);
-        const curSY = toScreenY(curPt.y);
-
-        // Projectile Glow
-        ctx.shadowColor = '#f97316';
-        ctx.shadowBlur = 15;
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(curSX, curSY, 5, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = '#f97316';
-        ctx.beginPath();
-        ctx.arc(curSX, curSY, 3.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // 11. Kinematic Force Vectors at Projectile (v, Fd, g)
-        if (showVectors && curPt.y > 0) {
-          const vel = curPt.speed;
-          const angle = Math.atan2(curPt.vy, curPt.vx);
-
-          // Velocity vector v (White)
-          const vLen = Math.min(60, vel * 0.2);
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(curSX, curSY);
-          ctx.lineTo(curSX + Math.cos(angle) * vLen, curSY - Math.sin(angle) * vLen);
-          ctx.stroke();
-
-          // Drag force Fd (Red / opposing velocity)
-          const area = Math.PI * Math.pow(ballistic.rockDiameter / 2, 2);
-          const rho = 1.225 * Math.exp(-curPt.y / 8500);
-          const fdMag = 0.5 * rho * ballistic.dragCoefficient * area * vel * vel;
-          const fdLen = Math.min(45, (fdMag / (ballistic.rockDensity * 0.05)) * 0.05 + 15);
-
-          ctx.strokeStyle = '#ef4444';
-          ctx.lineWidth = 1.8;
-          ctx.beginPath();
-          ctx.moveTo(curSX, curSY);
-          ctx.lineTo(curSX - Math.cos(angle) * fdLen, curSY + Math.sin(angle) * fdLen);
-          ctx.stroke();
-
-          // Gravity g (downwards)
-          ctx.strokeStyle = '#eab308';
-          ctx.lineWidth = 1.8;
-          ctx.beginPath();
-          ctx.moveTo(curSX, curSY);
-          ctx.lineTo(curSX, curSY + 30);
-          ctx.stroke();
-        }
-      }
-
-      // 12. Splash Particles
+      // 12. Splash Particles (Dynamic sea spray)
       for (const s of splashesRef.current) {
-        ctx.fillStyle = 'rgba(186, 230, 253, 0.8)';
+        ctx.fillStyle = 'rgba(224, 242, 254, 0.85)';
         ctx.beginPath();
         ctx.arc(toScreenX(s.x), toScreenY(s.y), s.size, 0, Math.PI * 2);
         ctx.fill();
@@ -1035,7 +1436,8 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
     selectedFlightLevel,
     probePos,
     ballisticTime,
-    ballisticShower,
+    simTimeMinutes,
+    ballisticShower2D,
     primaryTrajectory,
     idealParabola,
   ]);
@@ -1078,7 +1480,7 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
     if (!pts.length) return { t: 0, x: 0, y: 0, speed: 0, vx: 0, vy: 0 };
     let idx = pts.findIndex((p) => p.t >= ballisticTime);
     if (idx === -1) idx = pts.length - 1;
-    return pts[idx];
+    return pts[idx] || { t: 0, x: 0, y: 0, speed: 0, vx: 0, vy: 0 };
   }, [primaryTrajectory, ballisticTime]);
 
   const simHours = Math.floor(simTimeMinutes / 60);
@@ -1111,14 +1513,15 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
 
           <button
             onClick={() => applyViewFocus('crater')}
-            className={`px-2 py-1 rounded-lg text-[10px] font-medium transition-all border ${
+            className={`px-2 py-1 rounded-lg text-[10px] font-medium transition-all border flex items-center gap-1 ${
               viewFocus === 'crater'
                 ? 'bg-white text-black font-bold border-white shadow-sm'
                 : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800'
             }`}
             title="Perbesar ke kawah aktif G. Anak Krakatau"
           >
-            🌋 Kawah
+            <Mountain className="w-3 h-3 text-amber-400 stroke-[2.2] fill-amber-500/20" />
+            <span>Kawah</span>
           </button>
 
           <button
@@ -1707,8 +2110,8 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
                   : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white'
               }`}
             >
-              <span>💥</span>
-              <span>Animasi Lemparan Bom (Balistik RK4)</span>
+              <Mountain className="w-3.5 h-3.5 fill-current stroke-[2.2]" />
+              <span>Animasi Bom Vulkanik (RK4)</span>
             </button>
 
             <button
@@ -1752,7 +2155,12 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
                 </button>
 
                 <button
-                  onClick={() => setIsBallisticPlaying(!isBallisticPlaying)}
+                  onClick={() => {
+                    if (!isBallisticPlaying && ballisticTime >= totalFlightTime - 0.05) {
+                      setBallisticTime(0);
+                    }
+                    setIsBallisticPlaying(!isBallisticPlaying);
+                  }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border shadow ${
                     isBallisticPlaying
                       ? 'bg-amber-400 text-black border-amber-300 hover:bg-amber-300'
@@ -1767,7 +2175,7 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
                   ) : (
                     <>
                       <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Putar</span>
+                      <span>{ballisticTime >= totalFlightTime - 0.05 ? 'Ulangi' : 'Putar'}</span>
                     </>
                   )}
                 </button>
@@ -1794,15 +2202,15 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
                 </span>
                 <span className="text-zinc-600">|</span>
                 <span>
-                  Tinggi Bom: <strong className="text-amber-400">{curBallisticPt.y.toFixed(0)}m</strong>
+                  Tinggi Bom: <strong className="text-amber-400">{(curBallisticPt?.y ?? 0).toFixed(0)}m</strong>
                 </span>
                 <span className="text-zinc-600">|</span>
                 <span>
-                  Jarak: <strong className="text-white">{(curBallisticPt.x / 1000).toFixed(2)} km</strong>
+                  Jarak: <strong className="text-white">{((curBallisticPt?.x ?? 0) / 1000).toFixed(2)} km</strong>
                 </span>
                 <span className="text-zinc-600">|</span>
                 <span>
-                  Kecepatan: <strong className="text-red-400">{curBallisticPt.speed.toFixed(0)} m/s</strong>
+                  Kecepatan: <strong className="text-red-400">{(curBallisticPt?.speed ?? 0).toFixed(0)} m/s</strong>
                 </span>
               </div>
             </div>
@@ -1822,11 +2230,14 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
                 className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
               />
               <div className="flex justify-between text-[10px] font-mono text-zinc-400">
-                <span>🌋 Kawah G. Anak Krakatau (0s)</span>
+                <span className="flex items-center gap-1">
+                  <Mountain className="w-3 h-3 text-amber-400 stroke-[2]" />
+                  <span>Kawah G. Anak Krakatau (0s)</span>
+                </span>
                 <span className="text-white font-bold">
                   {ballisticTime >= totalFlightTime
                     ? `💥 Benturan di Titik Jatuh (${(primaryTrajectory.maxRange / 1000).toFixed(2)} km)!`
-                    : `Kecepatan: ${curBallisticPt.speed.toFixed(0)} m/s`}
+                    : `Kecepatan: ${(curBallisticPt?.speed ?? 0).toFixed(0)} m/s`}
                 </span>
                 <span>Mendarat ({totalFlightTime.toFixed(1)}s)</span>
               </div>
@@ -1856,7 +2267,12 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
                 </button>
 
                 <button
-                  onClick={() => setIsSmokePlaying(!isSmokePlaying)}
+                  onClick={() => {
+                    if (!isSmokePlaying && simTimeMinutes >= 240) {
+                      setSimTimeMinutes(0);
+                    }
+                    setIsSmokePlaying(!isSmokePlaying);
+                  }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border shadow ${
                     isSmokePlaying
                       ? 'bg-white text-black border-white hover:bg-zinc-200'
@@ -1871,7 +2287,7 @@ export const SideElevationCanvas: React.FC<SideElevationCanvasProps> = ({
                   ) : (
                     <>
                       <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Putar</span>
+                      <span>{simTimeMinutes >= 240 ? 'Ulangi' : 'Putar'}</span>
                     </>
                   )}
                 </button>

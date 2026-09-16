@@ -56,24 +56,44 @@ export const VolcanicEjectaDetailModal: React.FC<VolcanicEjectaDetailModalProps>
     );
   }, [ballistic, primaryAzimuth, plume.windSpeed, plume.windDirection, projectileCount, dispersionMode]);
 
+  const defaultBomb: ShowerBomb = useMemo(() => ({
+    id: 0,
+    label: 'Bom Vulkanik Primer',
+    color: '#ef4444',
+    rockDiameter: ballistic?.rockDiameter || 0.35,
+    rockMassKg: (4 / 3) * Math.PI * Math.pow((ballistic?.rockDiameter || 0.35) / 2, 3) * (ballistic?.rockDensity || 2500),
+    launchAngle: ballistic?.launchAngle || 45,
+    launchAzimuth: primaryAzimuth,
+    initialVelocity: ballistic?.initialVelocity || 200,
+    traj: {
+      points: [{ x: 0, y: ballistic?.ventElevation || 157, z: 0, t: 0, speed: ballistic?.initialVelocity || 200 }],
+      maxRange: 1200,
+      maxAltitude: 450,
+      flightTime: 8.5,
+      impactSpeed: 180,
+      impactEnergy: 500000,
+      landingPos: { x: 1200, y: 0, z: 0, t: 8.5, speed: 180 },
+    },
+  }), [ballistic, primaryAzimuth]);
+
   // Ensure a selected bomb exists
   const activeBomb: ShowerBomb = useMemo(() => {
-    if (selectedBombId !== null) {
+    if (selectedBombId !== null && shower?.length) {
       const found = shower.find((b) => b.id === selectedBombId);
       if (found) return found;
     }
-    return shower[0] || ({} as ShowerBomb);
-  }, [shower, selectedBombId]);
+    return (shower && shower.length > 0) ? shower[0] : defaultBomb;
+  }, [shower, selectedBombId, defaultBomb]);
 
   if (!isOpen) return null;
 
   // Aggregate metrics
-  const maxRangeMeters = Math.max(...shower.map((b) => b.traj.maxRange));
+  const maxRangeMeters = shower.length > 0 ? Math.max(...shower.map((b) => b.traj?.maxRange ?? 0)) : 1000;
   const maxRangeKm = maxRangeMeters / 1000;
-  const maxAltitudeMeters = Math.max(...shower.map((b) => b.traj.maxAltitude));
-  const totalImpactEnergyMJ = shower.reduce((acc, b) => acc + b.traj.impactEnergy / 1e6, 0);
-  const totalMassKg = shower.reduce((acc, b) => acc + b.rockMassKg, 0);
-  const anyBreached5km = shower.some((b) => b.traj.maxRange >= 5000);
+  const maxAltitudeMeters = shower.length > 0 ? Math.max(...shower.map((b) => b.traj?.maxAltitude ?? 0)) : 300;
+  const totalImpactEnergyMJ = shower.reduce((acc, b) => acc + (b.traj?.impactEnergy ?? 0) / 1e6, 0);
+  const totalMassKg = shower.reduce((acc, b) => acc + (b.rockMassKg ?? 0), 0);
+  const anyBreached5km = shower.some((b) => (b.traj?.maxRange ?? 0) >= 5000);
 
   // Helper for compass point
   const getCompassDirection = (deg: number): string => {
