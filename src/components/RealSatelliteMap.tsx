@@ -415,9 +415,9 @@ export const RealSatelliteMap: React.FC<RealSatelliteMapProps> = ({
   const [activeDrawer, setActiveDrawer] = useState<'impact' | 'layers' | 'analysis' | 'bmkg' | 'weather' | 'aerosol' | null>(null);
   const [activeAnimTab, setActiveAnimTab] = useState<'ballistic' | 'particles' | 'smoke'>('ballistic');
 
-  // Ejecta Particle System Overlay States
-  const [showParticleOverlay, setShowParticleOverlay] = useState<boolean>(true);
-  const [isParticlePlaying, setIsParticlePlaying] = useState<boolean>(true);
+  // Ejecta Particle System Overlay States (default OFF as requested)
+  const [showParticleOverlay, setShowParticleOverlay] = useState<boolean>(false);
+  const [isParticlePlaying, setIsParticlePlaying] = useState<boolean>(false);
   const [particleDensity, setParticleDensity] = useState<ParticleDensityMode>('standard');
   const [continuousEmission, setContinuousEmission] = useState<boolean>(false);
   const [particleBurstTrigger, setParticleBurstTrigger] = useState<number>(0);

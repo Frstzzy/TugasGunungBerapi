@@ -125,28 +125,89 @@ export const IntroModal: React.FC<IntroModalProps> = ({
             </div>
             <div className="space-y-1.5">
               <div className="flex items-baseline gap-3">
-                <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white font-sans">
-                  SimKratoa
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white font-sans">
+                  Selamat Datang di SimKratoa
                 </h1>
                 <span className="text-xs font-mono px-2.5 py-0.5 rounded-md bg-zinc-900 border border-zinc-750 text-zinc-300">
                   v2.5 • Multi-Physics
                 </span>
               </div>
-              <p className="text-sm sm:text-base text-zinc-300 font-medium">
+              <p className="text-sm sm:text-base text-amber-300 font-medium">
                 Platform Simulasi Komputasi Fisika Erupsi Gunung Anak Krakatau & Mitigasi Risiko Selat Sunda
               </p>
-              <p className="text-xs text-zinc-400 leading-relaxed max-w-2xl">
-                Simulasikan gerak balistik proyektil piroklastik, dinamika kolom abu vulkanik berdasar integrasi Runge-Kutta 4 (RK4), pemodelan dispersi atmosferik Gaussian, kondisi cuaca riil, serta matriks keterpaparan wilayah pesisir Banten dan Lampung.
+              <p className="text-xs text-zinc-300 leading-relaxed max-w-2xl">
+                Website ini dirancang untuk mensimulasikan dinamika letusan vulkanik kompleks kaldera Krakatau secara presisi menggunakan integrasi numerik Runge-Kutta 4 (RK4), pemodelan dispersi abu atmosferik Gaussian Mastin (2009), serta matriks keterpaparan mitigasi kebencanaan pesisir Selat Sunda.
               </p>
             </div>
           </div>
         </div>
 
+        {/* Panduan Penggunaan Website */}
+        <div className="px-6 sm:px-8 py-3 bg-zinc-900/40 border-y border-zinc-850">
+          <h2 className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+            <Info className="w-4 h-4 text-amber-400" />
+            Panduan Menggunakan Website Simulasi:
+          </h2>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+            {/* Step 1 */}
+            <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-white">
+                <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-[11px] font-mono">1</span>
+                <span>Pilih Skenario Erupsi</span>
+              </div>
+              <p className="text-zinc-400 text-[11px] leading-relaxed">
+                Pilih skenario historis di bawah (Krakatau 1883, Kolaps 2018, atau Siaga Level III) atau sesuaikan parameter ketinggian kolom abu & kecepatan lontaran secara manual.
+              </p>
+            </div>
+
+            {/* Step 2 */}
+            <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-white">
+                <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 flex items-center justify-center text-[11px] font-mono">2</span>
+                <span>Jelajahi 3 Mode Tampilan</span>
+              </div>
+              <p className="text-zinc-400 text-[11px] leading-relaxed">
+                Beralih antara tab <strong>Peta Satelit</strong> (GIS & radius KRB), <strong>Tampilan 3D</strong> (morfologi kawah realistis), dan <strong>Profil Elevasi 2D</strong> (penampang vertikal atmosfer 25km).
+              </p>
+            </div>
+
+            {/* Step 3 */}
+            <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-white">
+                <span className="w-5 h-5 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center text-[11px] font-mono">3</span>
+                <span>Picu & Kendalikan Erupsi</span>
+              </div>
+              <p className="text-zinc-400 text-[11px] leading-relaxed">
+                Klik tombol <strong>Erupsi Sekarang</strong> atau tekan tombol <kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[10px]">Spasi</kbd> untuk memicu ejeksi proyektil dan pemodelan sebaran abu.
+              </p>
+            </div>
+
+            {/* Step 4 */}
+            <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-white">
+                <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[11px] font-mono">4</span>
+                <span>Mitigasi & Ekspor Laporan</span>
+              </div>
+              <p className="text-zinc-400 text-[11px] leading-relaxed">
+                Pantau estimasi waktu tiba abu (ETA) di Anyer & Sebesi, status penerbangan Sigmet BMKG, serta cetak laporan resmi risiko bencana format PDF A4.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-2.5 p-2 rounded-lg bg-zinc-950/80 border border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span><strong>Catatan:</strong> Fitur partikel ejekta telah otomatis <em>dinonaktifkan (off)</em> saat masuk website untuk performa maksimal. Anda dapat mengaktifkannya kapan saja melalui tombol kontrol di peta.</span>
+            </span>
+          </div>
+        </div>
+
         {/* Feature Grid / 4 Pillars */}
-        <div className="px-6 sm:px-8 py-4">
-          <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+        <div className="px-6 sm:px-8 py-3.5">
+          <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
             <Layers className="w-3.5 h-3.5 text-zinc-400" />
-            Modul Utama Simulasi:
+            Fitur Utama Platform:
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">

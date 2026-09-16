@@ -471,7 +471,17 @@ export function computeIdealParabola(params: BallisticParams) {
   const flightTime = (vy + Math.sqrt(discriminant)) / g;
   const maxRange = vx * flightTime;
 
+  const points: { x: number; y: number; t: number }[] = [];
+  const steps = 80;
+  for (let i = 0; i <= steps; i++) {
+    const t = (flightTime * i) / steps;
+    const x = vx * t;
+    const y = Math.max(0, y0 + vy * t - 0.5 * g * t * t);
+    points.push({ x, y, t });
+  }
+
   return {
+    points,
     maxRange,
     maxAltitude,
     flightTime,

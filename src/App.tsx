@@ -289,6 +289,7 @@ export default function App() {
             <SideElevationCanvas
               ballistic={ballistic}
               plume={plume}
+              selectedPreset={selectedPreset}
               triggerCount={triggerCount}
               onUpdateWind={handleUpdateWind}
               onUpdateBallistic={handleUpdateBallistic}

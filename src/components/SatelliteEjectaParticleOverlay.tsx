@@ -256,6 +256,10 @@ export const SatelliteEjectaParticleOverlay: React.FC<SatelliteEjectaParticleOve
 
       const canvas = canvasRef.current;
       if (!canvas || !map || !showParticles) {
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
         animId = requestAnimationFrame(render);
         return;
       }
